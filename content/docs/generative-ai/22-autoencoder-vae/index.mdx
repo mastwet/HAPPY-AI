@@ -1,0 +1,453 @@
+---
+title: 22 自编码器与 VAE
+description: AE、Denoising AE、VAE 推导与实现
+---
+
+# 22 自编码器与 VAE
+
+自编码器（Autoencoder, AE）是"把数据压缩再还原"的网络。它的变体——变分自编码器（Variational Autoencoder, VAE）——是深度生成模型的奠基性工作之一，也是后续扩散模型的伏笔。
+
+## 自编码器的直觉
+
+想象你要把一张图片发给朋友，但网速太慢。怎么办？
+
+**思路**：找一个**压缩函数**，把图片变成小向量（编码），再找一个**还原函数**，把小向量变回图片（解码）。只要重建后的图片和原图差不多，就成功了。
+
+这就是自编码器：
+
+$$z = f_{\text{enc}}(x), \quad \hat{x} = f_{\text{dec}}(z)$$
+
+其中 $z$ 是**潜变量**（latent variable），维度往往远小于 $x$。
+
+训练目标：**最小化重建误差**。
+
+$$L = \|x - \hat{x}\|^2 = \|x - f_{\text{dec}}(f_{\text{enc}}(x))\|^2$$
+
+这种"自监督"训练不需要标签——输入本身就是监督信号。
+
+## 与 PCA 的关系
+
+如果编码器和解码器都是线性的，自编码器几乎等价于 PCA（主成分分析）：
+
+- 编码器：$z = W^T x$
+- 解码器：$\hat{x} = W z$
+- 解：$W$ 的列就是数据的主成分
+
+也就是说，非线性自编码器是 PCA 的"深度推广"。
+
+## 基础自编码器实现
+
+```python
+import torch
+import torch.nn as nn
+
+class Autoencoder(nn.Module):
+    def __init__(self, input_dim=784, hidden_dim=256, latent_dim=32):
+        super().__init__()
+        # 编码器：784 → 256 → 32
+        self.encoder = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim),
+        )
+        # 解码器：32 → 256 → 784
+        self.decoder = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, input_dim),
+            nn.Sigmoid(),  # 输出像素值在 [0, 1]
+        )
+
+    def forward(self, x):
+        z = self.encoder(x)
+        x_hat = self.decoder(z)
+        return x_hat, z
+
+
+# 训练（MNIST）
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model = Autoencoder().to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+criterion = nn.MSELoss()
+
+for epoch in range(10):
+    for x, _ in train_loader:
+        x = x.to(device).view(-1, 784)
+        x_hat, z = model(x)
+        loss = criterion(x_hat, x)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
+```
+
+训练完成后，编码器把每张图压缩到 32 维向量 $z$，解码器可以从 $z$ 还原图像。
+
+## 正则化自编码器家族
+
+基础 AE 容易"死记硬背"——把每张图编码成一个无意义的索引，丧失泛化能力。解决办法是**加正则化**。
+
+### 稀疏自编码器（Sparse AE）
+
+在损失函数中加入对编码器激活的稀疏约束：
+
+$$L = \|x - \hat{x}\|^2 + \lambda \sum_j \text{KL}(\rho \| \hat\rho_j)$$
+
+其中 $\hat\rho_j$ 是第 $j$ 个隐藏单元的平均激活率，$\rho$ 是目标稀疏度（如 0.05）。
+
+效果：迫使大部分隐藏单元不活跃，学到**解耦**的特征。
+
+### 降噪自编码器（Denoising AE）
+
+训练时给输入加噪，迫使模型学会"去噪"：
+
+```python
+# 训练时
+x_noisy = x + 0.5 * torch.randn_like(x)
+x_hat, z = model(x_noisy)
+loss = criterion(x_hat, x)  # 用原始 x 作为目标
+```
+
+效果：模型学到的是数据的**鲁棒本质特征**，不是表层细节。
+
+### 收缩自编码器（Contractive AE）
+
+在损失中加入对编码器 Jacobian 矩阵的 Frobenius 范数惩罚：
+
+$$L = \|x - \hat{x}\|^2 + \lambda \left\| \frac{\partial f_{\text{enc}}(x)}{\partial x} \right\|_F^2$$
+
+效果：编码器对输入的微小变化不敏感，学到**局部不变**的特征。
+
+## 潜空间可视化
+
+训练 AE 后，可以把测试集的编码 $z$ 用 t-SNE 降到 2 维可视化。
+
+```python
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+
+model.eval()
+z_list, label_list = [], []
+with torch.no_grad():
+    for x, y in test_loader:
+        z = model.encoder(x.to(device).view(-1, 784))
+        z_list.append(z.cpu().numpy())
+        label_list.append(y.numpy())
+
+z_all = np.concatenate(z_list, axis=0)
+label_all = np.concatenate(label_list, axis=0)
+
+# t-SNE 降维
+z_2d = TSNE(n_components=2).fit_transform(z_all)
+
+# 画图
+plt.figure(figsize=(8, 8))
+for digit in range(10):
+    mask = label_all == digit
+    plt.scatter(z_2d[mask, 0], z_2d[mask, 1], label=str(digit), s=5)
+plt.legend()
+plt.title("AE Latent Space (t-SNE)")
+plt.show()
+```
+
+**预期结果**：MNIST 的 10 个数字会形成 10 个清晰的簇。说明编码器学到了有意义的特征——这就是"潜空间"。
+
+## AE 的局限
+
+虽然 AE 学到了有意义的编码，但有两个大问题：
+
+1. **潜空间不连续**：随机采样一个 $z$ 送入解码器，往往得到"乱码"，而不是有意义的图像
+2. **不能控制生成**：想生成"数字 3"对应的图像？AE 没有这个能力
+
+根本原因是：AE 训练时只见过**真实数据编码出的 $z$**，没有约束 $z$ 服从什么分布。潜空间是"打洞的瑞士奶酪"——有些区域有意义的 $z$，有些区域没有。
+
+VAE 就是为了解决这个问题。
+
+---
+
+## VAE：变分自编码器
+
+VAE 的关键洞察：**编码器不输出一个确定的 $z$，而是输出一个分布**（通常是高斯）。解码器从这个分布中采样 $z$，再生成图像。
+
+$$q_\phi(z|x) = \mathcal{N}(\mu_\phi(x), \sigma_\phi^2(x))$$
+
+其中 $\phi$ 是编码器参数。
+
+这样做的好处：
+
+- 潜空间是**连续的**（高斯分布处处非零）
+- 强制 $z$ 服从先验 $p(z) = \mathcal{N}(0, I)$，方便随机采样生成
+
+### 直觉类比
+
+AE 像"字典"：每个真实样本对应一个"页码" $z$，查页码就还原内容。
+
+VAE 像"概率云"：每个真实样本对应一团概率云（高斯），从云中任取一个点都能还原"类似"内容。云的中心 $\mu$ 是"页码"，云的大小 $\sigma$ 是"模糊度"。
+
+### 为什么需要变分推断
+
+我们真正想要的是：给定 $x$，推断"是什么 $z$ 产生的 $x$"，即后验 $p(z|x)$。但：
+
+$$p(z|x) = \frac{p(x|z) p(z)}{p(x)}$$
+
+分母 $p(x) = \int p(x|z)p(z)dz$ 是**难解的积分**（高维空间积分）。
+
+变分推断的思路：**用一个简单的分布 $q_\phi(z|x)$ 去近似 $p(z|x)$**。通过优化 $\phi$，让 $q_\phi$ 尽可能接近真实后验。
+
+### ELBO 推导
+
+我们最大化对数似然 $\log p(x)$。从 Jensen 不等式出发：
+
+$$\log p(x) = \log \int p(x|z) p(z) dz = \log \int q_\phi(z|x) \frac{p(x|z) p(z)}{q_\phi(z|x)} dz$$
+
+$$= \log \mathbb{E}_{q_\phi(z|x)}\left[\frac{p(x|z) p(z)}{q_\phi(z|x)}\right] \geq \mathbb{E}_{q_\phi(z|x)}\left[\log \frac{p(x|z) p(z)}{q_\phi(z|x)}\right]$$
+
+这给出**证据下界（Evidence Lower Bound, ELBO）**：
+
+$$\mathcal{L}_{\text{ELBO}} = \mathbb{E}_{q_\phi(z|x)}[\log p(x|z)] - D_{KL}(q_\phi(z|x) \| p(z))$$
+
+**直觉解读**：
+
+- 第一项 $\mathbb{E}[\log p(x|z)]$：**重建项**——从 $z$ 还原 $x$ 的对数似然
+- 第二项 $D_{KL}$：**正则项**——让编码分布接近先验 $p(z)$
+
+我们最大化 ELBO，就间接最大化 $\log p(x)$，同时让 $q_\phi(z|x)$ 接近 $p(z|x)$（用 KL 散度衡量）。
+
+### 重参数化技巧（Reparameterization Trick）
+
+训练时我们需要从 $q_\phi(z|x) = \mathcal{N}(\mu, \sigma^2)$ 中采样 $z$。但"采样"操作**不可导**（argmax、采样都是离散的）。
+
+解决方案：**把随机性外置**。
+
+$$z = \mu_\phi(x) + \sigma_\phi(x) \odot \epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+
+现在 $z$ 是关于 $\mu$、$\sigma$、$\epsilon$ 的可微函数，梯度可以回传。这是 VAE 能训练的关键。
+
+### KL 散度的解析形式
+
+对角高斯 $q_\phi(z|x) = \mathcal{N}(\mu, \sigma^2)$ 和标准高斯 $p(z) = \mathcal{N}(0, I)$，KL 散度有闭式解：
+
+$$D_{KL} = -\frac{1}{2} \sum_{j=1}^{d} \left( 1 + \log \sigma_j^2 - \mu_j^2 - \sigma_j^2 \right)$$
+
+这极大简化了训练——不需要蒙特卡洛估计。
+
+### 损失函数总结
+
+对单个样本，VAE 的损失是负 ELBO：
+
+$$\mathcal{L} = -\mathbb{E}_{q_\phi(z|x)}[\log p(x|z)] + D_{KL}(q_\phi(z|x) \| p(z))$$
+
+实践中：
+
+- 重建项用 MSE 或 BCE
+- KL 项用上面的解析式
+- 总损失取 batch 平均
+
+## VAE 完整实现
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class VAE(nn.Module):
+    def __init__(self, input_dim=784, hidden_dim=400, latent_dim=20):
+        super().__init__()
+        # 编码器：x -> (mu, logvar)
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
+        self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
+        # 解码器：z -> x_hat
+        self.fc2 = nn.Linear(latent_dim, hidden_dim)
+        self.fc3 = nn.Linear(hidden_dim, input_dim)
+
+    def encode(self, x):
+        h = F.relu(self.fc1(x))
+        return self.fc_mu(h), self.fc_logvar(h)
+
+    def reparameterize(self, mu, logvar):
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        return mu + eps * std
+
+    def decode(self, z):
+        h = F.relu(self.fc2(z))
+        return torch.sigmoid(self.fc3(h))
+
+    def forward(self, x):
+        mu, logvar = self.encode(x)
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z), mu, logvar
+
+
+# 训练
+def vae_loss(x_hat, x, mu, logvar):
+    # 重建损失（BCE）
+    recon = F.binary_cross_entropy(x_hat, x, reduction="sum")
+    # KL 散度
+    kl = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+    return recon + kl, recon, kl
+
+
+device = "cuda"
+model = VAE().to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+
+for epoch in range(20):
+    total_recon, total_kl = 0, 0
+    for x, _ in train_loader:
+        x = x.to(device).view(-1, 784)
+        x_hat, mu, logvar = model(x)
+
+        loss, recon, kl = vae_loss(x_hat, x, mu, logvar)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        total_recon += recon.item()
+        total_kl += kl.item()
+    print(f"Epoch {epoch}: recon={total_recon/len(train_loader.dataset):.2f}, "
+          f"kl={total_kl/len(train_loader.dataset):.2f}")
+```
+
+**生成样本**（训练后）：
+
+```python
+with torch.no_grad():
+    z = torch.randn(64, 20).to(device)  # 从先验采样
+    samples = model.decode(z).cpu().view(-1, 28, 28)
+
+# 可视化
+import matplotlib.pyplot as plt
+fig, axes = plt.subplots(8, 8, figsize=(8, 8))
+for i, ax in enumerate(axes.flat):
+    ax.imshow(samples[i], cmap="gray")
+    ax.axis("off")
+plt.show()
+```
+
+**预期结果**：64 个手写数字的"模糊版"——VAE 的样本通常比 GAN 模糊，但分布更平滑。
+
+## KL 退火（KL Annealing）
+
+训练初期，KL 项的梯度可能把编码器"推"到标准高斯，导致**后验坍缩**（posterior collapse）：$z$ 完全不携带 $x$ 的信息，模型退化为"忽略输入的解码器"。
+
+**KL 退火**的解决办法：训练初期把 KL 系数从 0 慢慢升到 1：
+
+$$\mathcal{L} = \text{recon} + \beta(t) \cdot D_{KL}, \quad \beta(t) = \min(1, t/T)$$
+
+让模型先学会重建，再慢慢加入正则。
+
+## 条件 VAE（CVAE）
+
+普通 VAE 没法控制生成什么。**条件 VAE** 把标签 $y$ 也作为输入：
+
+$$q_\phi(z|x, y), \quad p_\theta(x|z, y)$$
+
+```python
+class CVAE(nn.Module):
+    def __init__(self, input_dim=784, label_dim=10, latent_dim=20):
+        super().__init__()
+        self.label_emb = nn.Embedding(label_dim, label_dim)
+        # 编码器输入：x + y
+        self.fc_enc = nn.Linear(input_dim + label_dim, 400)
+        self.fc_mu = nn.Linear(400, latent_dim)
+        self.fc_logvar = nn.Linear(400, latent_dim)
+        # 解码器输入：z + y
+        self.fc_dec = nn.Linear(latent_dim + label_dim, 400)
+        self.fc_out = nn.Linear(400, input_dim)
+
+    def encode(self, x, y):
+        y_oh = self.label_emb(y)
+        h = F.relu(self.fc_enc(torch.cat([x, y_oh], dim=1)))
+        return self.fc_mu(h), self.fc_logvar(h)
+
+    def decode(self, z, y):
+        y_oh = self.label_emb(y)
+        h = F.relu(self.fc_dec(torch.cat([z, y_oh], dim=1)))
+        return torch.sigmoid(self.fc_out(h))
+
+    def forward(self, x, y):
+        mu, logvar = self.encode(x, y)
+        z = self.reparameterize(mu, logvar)
+        return self.decode(z, y), mu, logvar
+```
+
+**生成时**：指定想要的标签 $y$，从 $p(z)$ 采样，喂入解码器——就能生成特定类别的图像。
+
+## β-VAE：解耦表示学习
+
+β-VAE 把 ELBO 改成：
+
+$$\mathcal{L} = \mathbb{E}[\log p(x|z)] - \beta D_{KL}(q_\phi(z|x) \| p(z))$$
+
+- $\beta = 1$：标准 VAE
+- $\beta > 1$：更强的正则化，**强制潜空间更稀疏、解耦**
+
+代价：重建质量下降。
+
+应用：人脸属性编辑（换表情、换发型、换年龄）就常用 β-VAE，因为不同 $z$ 维度对应不同语义。
+
+## VQ-VAE：离散潜空间
+
+VQ-VAE（Van den Oord 2017）把 VAE 推向了"通向 DALL-E 的桥梁"。
+
+**核心思想**：潜变量 $z$ 不是连续的，而是从一个**离散码本**（codebook）中选：
+
+1. 编码器输出 $z_e(x)$
+2. 找到码本中离 $z_e$ 最近的向量 $z_q$
+3. 用 $z_q$ 做解码
+
+训练时用**直通估计**（straight-through estimator）让梯度从 $z_q$ 直接传到 $z_e$。
+
+**优势**：
+- 离散表示，对应 token（类似 NLP）
+- 高质量重建
+- 可以和自回归模型结合 → 图像版 GPT → DALL-E
+
+**现代应用**：Stable Diffusion 的潜空间扩散就基于 VQ-VAE 思想。
+
+## 应用
+
+| 应用 | 说明 |
+|------|------|
+| 数据压缩 | VQ-VAE 优于 JPEG |
+| 异常检测 | 重建误差大 = 异常 |
+| 去噪 | 降噪自编码器 |
+| 缺失值填补 | 把缺失维当作潜变量推断 |
+| 风格迁移 | 在潜空间做插值 |
+| 潜空间扩散 | Stable Diffusion 的基础 |
+
+## 常见误区
+
+1. **认为 VAE 的样本一定模糊**：配合更深的网络、谱归一化，可以显著提升质量
+2. **忽视后验坍缩**：训练曲线 KL 突然掉到 0、recon 也很低就是坍缩信号
+3. **KL 系数随便调**：β > 1 不一定更好，要看任务
+4. **混淆 AE 和 PCA**：非线性 AE 可以学到的远比 PCA 多
+5. **重参数化失败**：忘记乘 std 或加 eps 都会破坏训练
+6. **没有做 KL 退火**：后验坍缩的常见原因
+
+## 小结
+
+| 概念 | 说明 |
+|------|------|
+| AE | 编码-解码结构，最小化重建误差 |
+| 正则化 AE | Sparse / Denoising / Contractive |
+| VAE | 编码器输出分布，潜空间连续 |
+| ELBO | 重建项 + KL 散度（负号） |
+| 重参数化 | 把采样外置为 $\mu + \sigma \odot \epsilon$ |
+| β-VAE | 加强 KL，得到解耦表示 |
+| VQ-VAE | 离散潜空间，通往 token 生成 |
+| CVAE | 条件化标签，控制生成 |
+
+## 进一步阅读
+
+1. **Kingma & Welling, 2014.** *Auto-Encoding Variational Bayes.* [arXiv:1312.6114](https://arxiv.org/abs/1312.6114) — VAE 原始论文
+2. **Rezende et al., 2014.** *Stochastic Backpropagation and Approximate Inference in Deep Generative Models.* [arXiv:1401.4082](https://arxiv.org/abs/1401.4082) — 与 VAE 同期的并行工作
+3. **Higgins et al., 2017.** *β-VAE: Learning Basic Visual Concepts with a Constrained Variational Framework.* [openreview](https://openreview.net/forum?id=Sy2fzU9gl)
+4. **Van den Oord et al., 2017.** *Neural Discrete Representation Learning.* [arXiv:1711.00937](https://arxiv.org/abs/1711.00937) — VQ-VAE
+5. **Sohn et al., 2015.** *Learning Structured Output Representation using Deep Conditional Generative Models.* [paper](https://papers.nips.cc/paper/2015/hash/8d55a248e66c0a18e1ed94d2d8d8269b-Abstract.html) — CVAE
+6. **Doersch, 2016.** *Tutorial on Variational Autoencoders.* [arXiv:1606.05908](https://arxiv.org/abs/1606.05908) — 最好的 VAE 入门教程

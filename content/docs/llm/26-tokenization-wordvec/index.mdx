@@ -1,0 +1,516 @@
+---
+title: 26 分词与词向量
+description: BPE、WordPiece、Word2Vec、文本表示
+---
+
+# 26 分词与词向量
+
+上一章我们了解了 NLP 的全貌。本章将深入 NLP 的第一个核心技术——**分词（Tokenization）**和**词向量（Word Embedding）**。分词是把连续文本"敲碎"成基本单元的过程，词向量则将这些单元转化为计算机能理解的数字。这两个步骤是所有 NLP 系统的基石。
+
+特别地，本章会重点讲解 **BPE 算法**——当今所有大语言模型（GPT、LLaMA、Qwen 等）的标配分词方法，以及 **Word2Vec**——开启了词向量时代的里程碑模型。
+
+## 1 为什么需要分词
+
+### 1.1 分词的定义
+
+**分词**的任务，是把连续的文本序列切分成具有独立语义的基本单元（称为 token）。对于英文等天然有空格作为分隔符的语言，分词相对简单。但对于中文，文本是连续的字符流，词之间没有明确的边界：
+
+```text
+英文：The cat sits on the mat
+切分：[The | cat | sits | on | the | mat]
+
+中文：今天天气真好
+切分：[今天 | 天气 | 真 | 好]
+```
+
+分词的质量直接影响后续所有 NLP 任务。一个经典的错误案例是"南京市长江大桥"——正确切分为 `南京市 / 长江大桥`，错误切分为 `南京 / 市长 / 江大桥` 则完全改变了语义。
+
+### 1.2 分词在 LLM 中的地位
+
+在以 Transformer 为基础的大语言模型兴起后，传统意义上"语言学分词"的应用逐步减少。现代 LLM 采用**子词（Subword）分词**策略，在"词"和"字符"之间取得了有效平衡。
+
+```text
+分词粒度对比：
+
+字粒度：  "自然语言处理" → [自, 然, 语, 言, 处, 理]
+                              序列长，但无 OOV 问题
+
+词粒度：  "自然语言处理" → [自然, 语言, 处理]
+                              序列短，但有 OOV 问题
+
+子词粒度：  "自然语言处理" → [自然, 语言, 处理]  或  [自然, 语言, 处, 理]
+                              根据词频自适应切分，LLM 标配
+```
+
+## 2 分词方法演进
+
+### 2.1 基于规则的方法
+
+最早的分词方法依赖**词典 + 匹配规则**。以 `jieba` 为代表，其核心流程是：
+
+1. 基于前缀词典（Trie 树）构建有向无环图（DAG）
+2. 用动态规划寻找概率最大的切分路径
+
+切分路径的概率可以近似为各词概率的乘积。在实际实现中，为避免浮点数下溢，使用**对数概率**将累乘转为累加：
+
+$$\underset{w}{\arg\max} \sum_{i=1}^{n} \log P(w_i)$$
+
+其中每个词的概率通过其在语料库中的频率来估算。
+
+```python
+import jieba
+
+text = "我在梦里收到清华大学录取通知书"
+seg_list = jieba.lcut(text, cut_all=False)
+print(seg_list)
+# ['我', '在', '梦里', '收到', '清华大学', '录取', '通知书']
+```
+
+词典法的局限在于：遇到词典中没有的新词（OOV，Out-Of-Vocabulary）时，容易被错误切碎。例如"奔波儿灞"不在词典中，会被切成 `['奔波', '儿', '灞']`。可以通过自定义词典来解决：
+
+```python
+# 创建自定义词典文件 user_dict.txt，内容为：
+# 奔波儿灞
+
+jieba.load_userdict("user_dict.txt")
+print(jieba.lcut("九头虫让奔波儿灞把唐僧师徒除掉"))
+# ['九头虫', '让', '奔波儿灞', '把', '唐僧', '师徒', '除掉']
+```
+
+### 2.2 基于统计的方法
+
+为了解决对人工词典的过度依赖，研究者转向统计学习。核心思想是把分词看作一个**序列标注**问题——为句子中的每个字打上位置标签：
+
+```text
+标签体系：B(词的开始) M(词的中间) E(词的结束) S(单字成词)
+
+"我爱北京" → S S B E
+"自然语言" → B E B E
+```
+
+**隐马尔可夫模型（HMM）**是解决这类问题的经典模型。它能学习字与标签之间的对应关系（发射概率）以及标签之间的转移关系（转移概率）。`jieba` 就利用 HMM 来识别词典外的新词。
+
+**条件随机场（CRF）**是更进一步的判别式模型，能够利用更丰富的上下文特征，在复杂歧义场景中效果优于 HMM。
+
+### 2.3 基于子词的方法——LLM 标配
+
+现代大语言模型（GPT、BERT、LLaMA 等）采用**子词（Subword）分词**，其中最主流的算法包括：
+
+| 算法 | 使用者 | 特点 |
+|------|--------|------|
+| BPE | GPT、LLaMA、Qwen | 自底向上合并高频字符对 |
+| WordPiece | BERT | 基于语言模型似然合并 |
+| SentencePiece | T5、LLaMA(部分) | 语言无关，直接处理原始文本 |
+
+子词分词的优势在于：高频词被完整保留，低频词或新词被拆解为更小的有意义单元，既保持了语义完整性又有效解决了 OOV 问题。
+
+## 3 BPE 算法详解
+
+**BPE（Byte Pair Encoding）**是当前大语言模型最广泛使用的分词算法。它的思想非常简洁：**从单个字符开始，反复合并出现频率最高的相邻字符对，直到达到预定的词表大小**。
+
+### 3.1 算法步骤
+
+假设我们有以下训练语料（已分词）：
+
+```text
+语料：["low", "low", "low", "lowest", "newer", "newer", "wider", "wider", "wider"]
+```
+
+**Step 1：初始化词表**，将每个词拆成字符序列，并在词尾添加特殊符号 `</w>` 表示词结束：
+
+```text
+"low"    → ['l', 'o', 'w', '</w>']
+"lowest" → ['l', 'o', 'w', 'e', 's', 't', '</w>']
+"newer"  → ['n', 'e', 'w', 'e', 'r', '</w>']
+"wider"  → ['w', 'i', 'd', 'e', 'r', '</w>']
+```
+
+**Step 2：统计所有相邻字符对的频率**：
+
+```text
+(l, o) -> 4次    (o, w) -> 4次    (w, </w>) -> 3次
+(w, e) -> 4次    (e, r) -> 3次    (e, s) -> 1次
+(n, e) -> 2次    (i, d) -> 3次    ...
+```
+
+**Step 3：合并频率最高的字符对**。假设 `(e, r)` 频率最高，将其合并为新符号 `er`：
+
+```text
+合并前：['n', 'e', 'w', 'e', 'r', '</w>']
+合并后：['n', 'e', 'w', 'er', '</w>']
+```
+
+**Step 4：重复 Step 2-3**，直到达到预定的词表大小。
+
+### 3.2 Python 实现
+
+下面是一个简化版的 BPE 实现，帮助理解算法本质：
+
+```python
+from collections import Counter, defaultdict
+
+def get_stats(vocab):
+    """统计所有相邻符号对的频率"""
+    pairs = Counter()
+    for word, freq in vocab.items():
+        symbols = word.split()
+        for i in range(len(symbols) - 1):
+            pairs[(symbols[i], symbols[i + 1])] += freq
+    return pairs
+
+def merge_vocab(pair, vocab):
+    """将频率最高的符号对合并"""
+    new_vocab = {}
+    bigram = ' '.join(pair)
+    replacement = ''.join(pair)
+    for word, freq in vocab.items():
+        new_word = word.replace(bigram, replacement)
+        new_vocab[new_word] = freq
+    return new_vocab
+
+# 初始化词表：每个词拆成字符
+corpus = ["low", "low", "low", "lowest", "newer", "newer", "wider", "wider", "wider"]
+vocab = Counter(corpus)
+# 转为字符序列格式
+vocab = {' '.join(word) + ' </w>': count for word, count in vocab.items()}
+
+print("初始词表:")
+for word, freq in vocab.items():
+    print("  {} : {}".format(word, freq))
+
+# 执行 5 次合并
+num_merges = 5
+for i in range(num_merges):
+    pairs = get_stats(vocab)
+    if not pairs:
+        break
+    best = max(pairs, key=pairs.get)
+    vocab = merge_vocab(best, vocab)
+    print("\n第 {} 次合并: {} -> {}".format(i + 1, best, ''.join(best)))
+    print("  当前词表片段: {}".format(list(vocab.keys())[:3]))
+```
+
+运行输出：
+
+```text
+初始词表:
+  l o w </w> : 3
+  l o w e s t </w> : 1
+  n e w e r </w> : 2
+  w i d e r </w> : 3
+
+第 1 次合并: ('e', 'r') -> 'er'
+  当前词表片段: ['l o w </w>', 'l o w e s t </w>', 'n e w er </w>']
+
+第 2 次合并: ('er', '</w>') -> 'er</w>'
+  ...
+```
+
+### 3.3 BPE 的直觉理解
+
+BPE 的本质可以这样理解：它是一个**数据驱动的压缩算法**。通过反复合并高频相邻对，它自动发现了语料中的**统计模式**——哪些字符组合经常一起出现，就将它们视为一个整体。
+
+这与人类对语言的直觉一致。在英语中，常见的前缀（un-、re-）和后缀（-ing、-tion、-ly）会被自动学到；在中文中，高频的字组合（"学习"、"自然"）会被保留为完整 token，而罕见字组合则被拆开。
+
+## 4 WordPiece 与 SentencePiece
+
+### 4.1 WordPiece
+
+**WordPiece** 由 Google 提出，用于 BERT 模型。它与 BPE 的核心区别在于**合并策略**：
+
+- BPE 合并频率最高的字符对
+- WordPiece 合并能**最大化语言模型似然**的字符对
+
+WordPiece 使用 `##` 前缀标记非词首的子词：
+
+```text
+"unhappiness" → ["un", "##happi", "##ness"]
+"playing"     → ["play", "##ing"]
+```
+
+这种设计让模型能够区分词的不同位置，有助于理解词的结构。
+
+### 4.2 SentencePiece
+
+**SentencePiece** 由 Google 开发，是一个**语言无关**的分词工具。它的核心特点是：
+
+1. **直接处理原始文本**：将输入视为 Unicode 字符流，不需要预分词
+2. **可逆编码**：token 序列可以完美还原为原始文本
+3. **支持多种算法**：内置 BPE 和 Unigram 两种子词算法
+
+SentencePiece 特别适合处理中文、日文等没有天然空格分隔的语言，被 T5、LLaMA 等模型广泛采用。
+
+```text
+三种方法对比：
+
+BPE:        合并频率最高的对 → GPT、LLaMA
+WordPiece:  合并似然最大的对 → BERT
+SentencePiece: 语言无关框架 → T5、LLaMA(部分)
+```
+
+## 5 词向量概述
+
+分词解决了"如何切分文本"的问题，接下来要解决的是**如何将这些词转化为数字**。
+
+### 5.1 One-Hot 编码的局限
+
+最直观的方法是 One-Hot 编码——为每个词分配一个唯一位置为 1 的高维向量：
+
+```text
+词表：[我, 喜欢, 吃, 苹果, 香蕉]
+
+"我"   → [1, 0, 0, 0, 0]
+"喜欢" → [0, 1, 0, 0, 0]
+"苹果" → [0, 0, 0, 1, 0]
+"香蕉" → [0, 0, 0, 0, 1]
+```
+
+One-Hot 编码有两个根本性问题：
+
+- **维度灾难**：词表大小通常数万，向量维度极高且 99.97% 以上为 0
+- **语义鸿沟**：任意两个不同词的向量正交（点积为 0），"苹果"和"香蕉"的距离与"苹果"和"我"的距离完全相同
+
+### 5.2 词袋模型与 TF-IDF
+
+**词袋模型（BoW）**将文档中所有词的频次统计起来作为文档向量，忽略了词序。**TF-IDF** 在此基础上加入了逆文档频率加权，降低了常见词的权重。
+
+这些方法在文本分类等任务中表现不错，但仍然是稀疏表示，无法捕捉词与词之间的语义关系。
+
+## 6 Word2Vec 原理
+
+2013 年，Google 的 Tomas Mikolov 提出了 **Word2Vec** 模型，彻底改变了词向量的面貌。它将词映射到低维（通常 100-300 维）的稠密向量空间，语义相近的词在向量空间中距离更近。
+
+### 6.1 核心思想：分布式假设
+
+Word2Vec 的理论基础是语言学中的**分布式假设**：
+
+> 一个词的含义，由其上下文中的词语所决定。
+
+如果两个词经常出现在相似的上下文中，它们的语义就是相近的。例如，"猫"和"狗"经常与"宠物"、"喂"、"可爱"等词共同出现，因此它们的向量应该接近。
+
+### 6.2 CBOW 模型
+
+**CBOW（Continuous Bag-of-Words）**的任务是**根据上下文预测中心词**。
+
+```text
+句子：The cat sits on the mat
+窗口大小 = 2
+
+训练样本：
+  上下文 [The, sits]    → 预测 cat
+  上下文 [cat, on]      → 预测 sits
+  上下文 [sits, the]    → 预测 on
+```
+
+模型架构：
+
+```text
+输入层：  上下文词的 One-Hot 向量
+           ↓
+投影层：  查询词向量矩阵 W_in，得到各上下文词的向量
+           ↓
+聚合层：  对上下文词向量求平均 → 上下文向量 h
+           ↓
+输出层：  h × W_out → Softmax → 预测概率分布
+           ↓
+损失函数：交叉熵损失（预测 vs 真实中心词）
+```
+
+损失函数为负对数似然：
+
+$$J = -\log \frac{\exp(u_c^T h)}{\sum_{j=1}^{|V|} \exp(u_j^T h)}$$
+
+其中 $u_c$ 是目标词的输出向量，$h$ 是上下文向量，$\vert V \vert$ 是词表大小。
+
+### 6.3 Skip-gram 模型
+
+**Skip-gram** 与 CBOW 相反，任务是**根据中心词预测上下文**。
+
+```text
+句子：The cat sits on the mat
+中心词 cat → 预测 [The, sits]
+中心词 sits → 预测 [cat, on]
+```
+
+Skip-gram 将一个预测任务分解为多个独立的子任务，对每个上下文位置都进行一次预测。这使得它在处理**低频词**和**大数据集**时通常能得到质量更高的词向量。
+
+### 6.4 负采样加速训练
+
+无论是 CBOW 还是 Skip-gram，输出层的 Softmax 都需要遍历整个词表（通常数万到数十万词），计算开销巨大。**负采样（Negative Sampling）**是一种高效的近似方法。
+
+核心思想：不再计算完整的 Softmax，而是将问题转化为**二分类**——区分"真实的上下文对"和"随机采样的噪声对"。
+
+```text
+正样本：(cat, sits)  ← 真实的上下文关系
+负样本：(cat, eat)    ← 随机采样的噪声
+负样本：(cat, blue)   ← 随机采样的噪声
+```
+
+对于每个正样本，随机采样 $K$ 个负样本（通常 $K=5 \sim 20$），然后训练模型区分它们。这将每步的计算量从 $\vert V \vert$ 降低到 $K+1$，极大地加速了训练。
+
+### 6.5 为什么 Word2Vec 有效
+
+从数学角度看，Word2Vec 的训练过程本质上是在对**词-上下文共现矩阵**进行隐式的**矩阵分解**。滑动窗口机制不断生成重叠的训练样本，迫使出现在相似上下文中的词拥有相近的向量：
+
+```text
+滑动窗口示例（窗口大小=2）：
+
+"The cat sits on the mat"
+ 窗口1: [The, ?, sits] → cat
+ 窗口2: [cat, ?, on]   → sits
+ ...
+
+当两个词（如 "cat" 和 "dog"）频繁出现在相似上下文中时，
+为了降低损失，模型会将它们的向量推向相近的位置。
+```
+
+点积得分公式为：
+
+$$\text{score} = x \cdot u_{\text{target}}$$
+
+最大化点积等价于最小化两个向量的夹角——这就是语义相似性的数学基础。
+
+## 7 Gensim 词向量实战
+
+**Gensim** 是一个强大的 Python 库，内置了 Word2Vec、FastText 等算法的高效实现。下面我们用它来训练词向量并探索语义关系。
+
+### 7.1 训练 Word2Vec
+
+```python
+import jieba
+from gensim.models import Word2Vec
+
+# 准备语料
+headlines = [
+    "央行降息，刺激股市反弹",
+    "A股市场持续震荡，投资者需谨慎",
+    "球队赢得总决赛冠军，球员表现出色",
+    "国家队公布最新一期足球集训名单",
+    "篮球巨星刷新历史得分记录",
+    "理财产品收益率创下新高",
+]
+tokenized = [jieba.lcut(h) for h in headlines]
+
+# 训练 Word2Vec
+model = Word2Vec(
+    tokenized,
+    vector_size=50,   # 词向量维度
+    window=3,         # 上下文窗口大小
+    min_count=1,      # 最小词频
+    sg=1,             # 1=Skip-gram, 0=CBOW
+)
+
+# 查看词向量维度
+print("词向量维度:", model.wv["股市"].shape)
+```
+
+### 7.2 语义相似度与类比推理
+
+```python
+# 寻找最相似的词
+similar = model.wv.most_similar("股市", topn=5)
+print("与股市最相似的词:")
+for word, score in similar:
+    print("  {} : {:.4f}".format(word, score))
+
+# 计算两个词的相似度
+sim = model.wv.similarity("球队", "球员")
+print("球队 vs 球员: {:.4f}".format(sim))
+
+# 词向量类比推理（经典示例）
+# 国王 - 男人 + 女人 ≈ 女王
+# 在小语料上效果可能不明显，需要大规模语料
+```
+
+### 7.3 模型持久化
+
+```python
+from gensim.models import KeyedVectors
+
+# 保存词向量（只保存向量，不保存训练状态）
+model.wv.save("word_vectors.kv")
+
+# 加载词向量
+loaded_wv = KeyedVectors.load("word_vectors.kv")
+print("加载成功，球队 vs 球员: {:.4f}".format(
+    loaded_wv.similarity("球队", "球员")
+))
+```
+
+> **注意**：小语料训练的词向量质量有限，实际项目中通常使用大规模语料（如维基百科）训练。经典的中文预训练词向量包括腾讯 AI Lab 的 800 万中文词向量等。
+
+## 8 从静态词向量到上下文表示
+
+Word2Vec 虽然是里程碑式的算法，但存在一个根本性局限：它产生的是**静态词向量**——每个词只有一个固定的向量，无论出现在什么上下文中。
+
+```text
+Word2Vec 的局限：
+
+"小米" 在 "农民收割小米" 中 → 同一个向量
+"小米" 在 "小米发布新手机" 中 → 同一个向量
+
+这显然不合理！
+```
+
+### 8.1 ELMo：动态词向量的开端
+
+2018 年，**ELMo（Embeddings from Language Models）**首次实现了动态词向量。它使用双向 LSTM 在大规模语料上预训练语言模型，然后根据词出现的具体上下文生成不同的向量。
+
+### 8.2 BERT：上下文表示的飞跃
+
+同年，**BERT** 基于 Transformer 架构，通过掩码语言模型（Masked Language Model）学习上下文表示。BERT 的每个 token 的表示都融合了双向上下文信息，质量远超 ELMo。
+
+### 8.3 LLM：隐式表示
+
+大语言模型不再显式地学习"词向量"，而是通过自回归预训练在模型内部隐式地学习极其丰富的语言表示。这些表示已经远远超越了传统词向量的语义范围。
+
+```text
+演进路线：
+Word2Vec (2013) → 静态、无上下文
+  → ELMo (2018)   → 动态、双向 LSTM
+    → BERT (2018)   → 动态、Transformer、双向
+      → GPT-3 (2020)  → 动态、超大规模、自回归
+        → GPT-4 (2023)  → 多模态、超强推理
+```
+
+## 9 常见误区
+
+**误区 1："中文分词比英文分词更难"**
+
+中文分词确实没有天然的空格分隔符，但现代子词分词（BPE）对中英文的处理方式趋同——都是基于统计的子词切分，不再依赖传统语言学分词。
+
+**误区 2："BPE 学到的是语言学意义上的词根词缀"**
+
+BPE 基于统计频率合并，不理解语言学概念。它学到的"子词"可能与词根词缀巧合地重合，但也可能完全不符合语言学直觉。
+
+**误区 3："Word2Vec 已经过时，不需要学了"**
+
+Word2Vec 的核心思想（分布式假设、通过预测任务学习表示）直接启发了 ELMo、BERT 和 GPT。理解 Word2Vec 是理解现代 LLM 的重要基础。
+
+**误区 4："词向量维度越高越好"**
+
+维度是超参数，需要在表达能力和效率之间权衡。对于 Word2Vec，通常 100-300 维就足够了。过高的维度可能导致过拟合和计算浪费。
+
+**误区 5："负采样只是为了加速训练"**
+
+负采样不仅是工程上的加速技巧，它还有正则化效果——通过引入噪声样本，防止模型过度拟合高频词对。
+
+## 小结
+
+本章从两个核心角度介绍了 NLP 的基础技术：
+
+1. **分词**是从文本到 token 的桥梁。从规则方法到统计方法再到子词方法，BPE 成为 LLM 的标配分词算法，通过自底向上合并高频字符对实现词表与语义的平衡
+2. **词向量**是从符号到数字的桥梁。Word2Vec 通过 CBOW 和 Skip-gram 两种架构，基于分布式假设学习稠密的语义向量，开启了词向量时代
+3. 从静态词向量到上下文表示，再到 LLM 的隐式表示，文本表示技术不断演进
+
+下一章我们将学习 RNN 与 Seq2Seq 模型——在 Transformer 出现之前，它们是序列建模的主力架构。
+
+## 进一步阅读
+
+- Sennrich, R. et al. (2016). *Neural Machine Translation of Rare Words with Subword Units*. arXiv:1508.07909
+- Mikolov, T. et al. (2013). *Efficient Estimation of Word Representations in Vector Space*. arXiv:1301.3781
+- Mikolov, T. et al. (2013). *Distributed Representations of Words and Phrases and their Compositionality*. arXiv:1310.4546
+- Harris, Z. S. (1954). *Distributional Structure*. Word, 10(2-3), 146-162
+- Peters, M. et al. (2018). *Deep Contextualized Word Representations* (ELMo). arXiv:1802.05365
+- Devlin, J. et al. (2019). *BERT: Pre-training of Deep Bidirectional Transformers*. arXiv:1810.04805
+- Gensim 官方文档：https://radimrehurek.com/gensim/

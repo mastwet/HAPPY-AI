@@ -1,0 +1,331 @@
+---
+title: 06 线性回归
+description: 第一个机器学习算法
+---
+
+# 06 线性回归
+
+线性回归是机器学习中最基础、最经典的算法，也是理解后续复杂模型的起点。
+
+## 什么是回归
+
+**回归（Regression）**：预测连续数值的任务。
+
+| 任务 | 输入 | 输出 |
+|------|------|------|
+| 分类 | 特征 | 离散类别（是/否，A/B/C） |
+| 回归 | 特征 | 连续数值（价格、温度、分数） |
+
+例子：
+- 根据房屋面积、位置预测房价
+- 根据广告投入预测销售额
+- 根据历史数据预测明天的温度
+
+## 线性回归模型
+
+### 模型定义
+
+假设目标变量 **y** 与特征 **x** 之间存在线性关系：
+
+$$y = wx + b$$
+
+其中：
+- **w** 是权重（weight）
+- **b** 是偏置（bias）
+- **x** 是特征
+- **y** 是预测值
+
+### 直观理解
+
+线性回归的核心思想是**找到一条最佳拟合直线**，使得所有数据点到这条直线的距离之和最小。
+
+```
+房价
+  │    ×
+  │  ×   ×
+  │×   ×    ×  ← 这条线就是回归线
+  │×      ×
+  └──────────────
+      房屋面积
+```
+
+### 多维情况
+
+当有多个特征时：
+
+$$y = w_1x_1 + w_2x_2 + \ldots + w_nx_n + b$$
+
+用向量表示：
+
+$$y = \mathbf{w}^T \mathbf{x} + b$$
+
+### 线性回归的假设
+
+线性回归模型基于以下假设：
+
+1. **线性关系**：特征与目标变量之间存在线性关系
+2. **独立性**：样本之间相互独立
+3. **同方差性**：误差项的方差恒定
+4. **正态性**：误差项服从正态分布
+
+### 实际应用中的注意事项
+
+1. **特征缩放**：不同特征的量纲差异很大时，需要进行标准化
+2. **多重共线性**：特征之间高度相关时，模型不稳定
+3. **异常值影响**：异常值对回归结果影响较大
+
+
+![线性回归拟合示意](/images/06-linear-fit.png)
+
+*线性回归拟合示意*
+
+## 损失函数
+
+### 均方误差（MSE）
+
+衡量预测值与真实值之间的差距：
+
+$$J(w, b) = \frac{1}{\text{m}} \sum_{i=1}^{\text{m}} (y_i - \hat{y}_i)^2$$
+
+其中：
+- **m** 是样本数量
+- **y_i** 是真实值
+- $$\hat{y}_i$$ 是预测值
+
+```python
+import numpy as np
+
+def mse_loss(y_true, y_pred):
+    return np.mean((y_true - y_pred) ** 2)
+
+# 示例
+y_true = np.array([3, 5, 2, 8])
+y_pred = np.array([2.5, 5.1, 1.8, 7.9])
+print(f"MSE: {mse_loss(y_true, y_pred):.4f}")  # 0.0875
+```
+
+
+![残差示意](/images/06-residual.png)
+
+*残差示意*
+
+## 最小二乘法
+
+### 解析解
+
+对损失函数求导并令其为零，可以得到解析解：
+
+$$\mathbf{w} = (\mathbf{X}^T \mathbf{X})^{-1} \mathbf{X}^T \mathbf{y}$$
+
+```python
+import numpy as np
+
+def linear_regression_normal(X, y):
+    """
+    使用正规方程求解线性回归
+    X: (m, n) 特征矩阵
+    y: (m,) 目标向量
+    """
+    # 添加偏置项
+    X_b = np.c_[np.ones((X.shape[0], 1)), X]
+    
+    # 正规方程
+    w = np.linalg.inv(X_b.T @ X_b) @ X_b.T @ y
+    
+    return w
+
+# 示例数据
+X = np.array([[1], [2], [3], [4], [5]])
+y = np.array([2, 4, 5, 4, 5])
+
+w = linear_regression_normal(X, y)
+print(f"偏置 b: {w[0]:.4f}")
+print(f"权重 w: {w[1]:.4f}")
+
+# 预测
+X_test = np.array([[6]])
+X_test_b = np.c_[np.ones((X_test.shape[0], 1)), X_test]
+pred = X_test_b @ w
+print(f"x=6 的预测值: {pred[0]:.4f}")
+```
+
+## 梯度下降法
+
+当特征数量很大时，正规方程计算 $$(\mathbf{X}^T \mathbf{X})^{-1}$$ 会很慢。梯度下降是更通用的优化方法。
+
+### 梯度下降步骤
+
+1. 初始化参数 $$w, b$$
+2. 计算损失函数对参数的梯度
+3. 沿梯度反方向更新参数
+4. 重复步骤 2-3 直到收敛
+
+### 梯度计算
+
+$$\frac{\partial J}{\partial w} = \frac{2}{\text{m}} \sum_{i=1}^{\text{m}} (\hat{y}_i - y_i) x_i$$
+
+$$\frac{\partial J}{\partial b} = \frac{2}{\text{m}} \sum_{i=1}^{\text{m}} (\hat{y}_i - y_i)$$
+
+### 参数更新
+
+$$w := w - \alpha \frac{\partial J}{\partial w}$$
+
+$$b := b - \alpha \frac{\partial J}{\partial b}$$
+
+其中 $$\alpha$$ 是学习率。
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+def gradient_descent(X, y, learning_rate=0.01, epochs=1000):
+    m = len(y)
+    w, b = 0, 0
+    
+    # 记录损失变化
+    losses = []
+    
+    for _ in range(epochs):
+        # 预测
+        y_pred = w * X + b
+        
+        # 计算梯度
+        dw = (2/m) * np.sum((y_pred - y) * X)
+        db = (2/m) * np.sum(y_pred - y)
+        
+        # 更新参数
+        w -= learning_rate * dw
+        b -= learning_rate * db
+        
+        # 记录损失
+        loss = np.mean((y - y_pred) ** 2)
+        losses.append(loss)
+    
+    return w, b, losses
+
+# 生成示例数据
+np.random.seed(42)
+X = np.random.rand(100) * 10
+y = 2 * X + 1 + np.random.randn(100) * 2  # y = 2x + 1 + 噪声
+
+# 训练
+w, b, losses = gradient_descent(X, y, learning_rate=0.01, epochs=1000)
+
+print(f"真实参数: w=2, b=1")
+print(f"估计参数: w={w:.4f}, b={b:.4f}")
+
+# 可视化
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 2, 1)
+plt.scatter(X, y, alpha=0.5, label='Data')
+X_line = np.linspace(X.min(), X.max(), 100)
+plt.plot(X_line, w * X_line + b, 'r-', label=f'y = {w:.2f}x + {b:.2f}')
+plt.xlabel('X')
+plt.ylabel('y')
+plt.legend()
+plt.title('Linear Regression')
+
+plt.subplot(1, 2, 2)
+plt.plot(losses)
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Loss Curve')
+plt.yscale('log')
+
+plt.tight_layout()
+plt.show()
+```
+
+## 使用 Scikit-learn
+
+```python
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score
+import numpy as np
+
+# 生成数据
+np.random.seed(42)
+X = np.random.rand(100, 1) * 10
+y = 2 * X.squeeze() + 1 + np.random.randn(100) * 2
+
+# 划分数据集
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+# 创建模型
+model = LinearRegression()
+
+# 训练
+model.fit(X_train, y_train)
+
+# 预测
+y_pred = model.predict(X_test)
+
+# 评估
+mse = mean_squared_error(y_test, y_pred)
+r2 = r2_score(y_test, y_pred)
+
+print(f"权重 w: {model.coef_[0]:.4f}")
+print(f"偏置 b: {model.intercept_:.4f}")
+print(f"MSE: {mse:.4f}")
+print(f"R²: {r2:.4f}")
+```
+
+## 多项式回归
+
+当数据不是线性关系时，可以用多项式特征：
+
+$$y = w_0 + w_1x + w_2x^2 + \ldots + w_nx^n$$
+
+```python
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import Pipeline
+
+# 创建多项式回归管道
+poly_reg = Pipeline([
+    ('poly', PolynomialFeatures(degree=2)),
+    ('linear', LinearRegression())
+])
+
+# 训练
+poly_reg.fit(X_train, y_train)
+```
+
+## 模型评估指标
+
+| 指标 | 公式 | 说明 |
+|------|------|------|
+| MSE | $$\frac{1}{\text{m}}\sum(y_i-\hat{y}_i)^2$$ | 均方误差，对异常值敏感 |
+| RMSE | $$\sqrt{MSE}$$ | 均方根误差，与目标同量纲 |
+| MAE | $$\frac{1}{\text{m}}\sum\vert y_i-\hat{y}_i\vert$$ | 平均绝对误差，更鲁棒 |
+| R² | $$1 - \frac{SS_{res}}{SS_{tot}}$$ | 决定系数，越接近1越好 |
+
+```python
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+print(f"MSE: {mean_squared_error(y_test, y_pred):.4f}")
+print(f"RMSE: {np.sqrt(mean_squared_error(y_test, y_pred)):.4f}")
+print(f"MAE: {mean_absolute_error(y_test, y_pred):.4f}")
+print(f"R²: {r2_score(y_test, y_pred):.4f}")
+```
+
+## 小结
+
+| 概念 | 说明 |
+|------|------|
+| 线性回归 | 假设目标与特征呈线性关系 |
+| 损失函数 | MSE：衡量预测与真实的差距 |
+| 正规方程 | 解析解，适合小数据集 |
+| 梯度下降 | 迭代优化，适合大数据集 |
+| 多项式回归 | 用多项式特征拟合非线性关系 |
+
+## 练习
+
+1. 实现一个多元线性回归（多个特征），用正规方程和梯度下降分别求解，比较结果。
+
+2. 对波士顿房价数据集（或加州房价数据集）进行完整分析：数据探索、预处理、建模、评估。
+
+3. 尝试不同的学习率（如 0.001, 0.01, 0.1, 1.0），观察梯度下降的收敛情况。
+
+4. 实现带 L2 正则化的线性回归（Ridge），比较与普通线性回归的差异。

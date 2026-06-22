@@ -1,0 +1,273 @@
+---
+title: 09 模型评估
+description: 准确率、精确率、召回率、F1、ROC曲线
+---
+
+# 09 模型评估
+
+模型训练完成后，需要科学评估其性能。不同的评估指标适用于不同的场景。
+
+## 为什么需要模型评估
+
+### 模型评估的目的
+
+1. **选择最佳模型**：在多个候选模型中选择最优的一个
+2. **调参指导**：通过评估结果指导参数调整
+3. **性能预测**：估计模型在真实环境中的表现
+4. **问题诊断**：发现模型的不足（如过拟合、欠拟合）
+
+### 评估的基本原则
+
+| 原则 | 说明 |
+|------|------|
+| **独立性** | 评估数据必须与训练数据完全分离 |
+| **代表性** | 评估数据应能代表真实场景 |
+| **一致性** | 使用相同的评估指标和流程 |
+| **可重复** | 多次评估结果应稳定 |
+
+### 常见的评估错误
+
+1. **数据泄露**：评估数据混入训练数据
+2. **指标选择不当**：用准确率评估不平衡数据集
+3. **单次评估**：没有交叉验证，结果不稳定
+4. **忽视业务指标**：只看技术指标，忽视业务价值
+
+## 分类任务评估
+
+### 混淆矩阵
+
+| 实际 \ 预测 | 预测为正 | 预测为负 |
+|-----------|---------|---------|
+| **实际为正** | TP（真正例） | FN（假反例） |
+| **实际为负** | FP（假正例） | TN（真反例） |
+
+```python
+from sklearn.metrics import confusion_matrix
+
+cm = confusion_matrix(y_true, y_pred)
+print(cm)
+# [[TN, FP]
+#  [FN, TP]]
+```
+
+### 基本指标
+
+**准确率（Accuracy）**：
+
+$$\text{Accuracy} = \frac{TP + TN}{TP + TN + FP + FN}$$
+
+```python
+from sklearn.metrics import accuracy_score
+
+acc = accuracy_score(y_true, y_pred)
+```
+
+**精确率（Precision）**：预测为正例中，实际为正例的比例
+
+$$\text{Precision} = \frac{TP}{TP + FP}$$
+
+**召回率（Recall）**：实际为正例中，被正确预测的比例
+
+$$\text{Recall} = \frac{TP}{TP + FN}$$
+
+```python
+from sklearn.metrics import precision_score, recall_score
+
+precision = precision_score(y_true, y_pred)
+recall = recall_score(y_true, y_pred)
+```
+
+### F1 分数
+
+精确率和召回率的调和平均：
+
+$$F1 = 2 \times \frac{\text{Precision} \times \text{Recall}}{\text{Precision} + \text{Recall}}$$
+
+```python
+from sklearn.metrics import f1_score
+
+f1 = f1_score(y_true, y_pred)
+```
+
+### 何时用哪个指标
+
+| 场景 | 优先指标 | 原因 |
+|------|---------|------|
+| 类别平衡 | 准确率 | 简单直观 |
+| 类别不平衡 | F1、精确率、召回率 | 准确率会误导 |
+| 垃圾邮件检测 | 精确率 | 误杀正常邮件代价高 |
+| 疾病筛查 | 召回率 | 漏诊代价高 |
+| 推荐系统 | F1 | 平衡精确率和召回率 |
+
+## ROC 曲线与 AUC
+
+### ROC 曲线
+
+**Receiver Operating Characteristic**：
+
+- **横轴**：假正例率（FPR）= FP / (FP + TN)
+- **纵轴**：真正例率（TPR）= TP / (TP + FN)
+
+```python
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
+
+# 计算 ROC 曲线
+fpr, tpr, thresholds = roc_curve(y_true, y_prob)
+roc_auc = auc(fpr, tpr)
+
+# 绘制
+plt.plot(fpr, tpr, label=f'ROC Curve (AUC = {roc_auc:.2f})')
+plt.plot([0, 1], [0, 1], 'k--', label='Random')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.legend()
+plt.show()
+```
+
+### AUC
+
+**Area Under the ROC Curve**：
+
+- AUC = 0.5：随机猜测
+- AUC = 1：完美分类
+- AUC > 0.8：良好
+- AUC > 0.9：优秀
+
+
+![ROC 曲线示意](/images/09-roc.png)
+
+*ROC 曲线示意*
+
+## 回归任务评估
+
+### 均方误差（MSE）
+
+$$MSE = \frac{1}{\text{m}} \sum_{i=1}^{\text{m}} (y_i - \hat{y}_i)^2$$
+
+```python
+from sklearn.metrics import mean_squared_error
+
+mse = mean_squared_error(y_true, y_pred)
+rmse = np.sqrt(mse)
+```
+
+### 平均绝对误差（MAE）
+
+$$MAE = \frac{1}{\text{m}} \sum_{i=1}^{\text{m}} |y_i - \hat{y}_i|$$
+
+```python
+from sklearn.metrics import mean_absolute_error
+
+mae = mean_absolute_error(y_true, y_pred)
+```
+
+### R² 分数
+
+$$R^2 = 1 - \frac{\sum(y_i - \hat{y}_i)^2}{\sum(y_i - \bar{y})^2}$$
+
+```python
+from sklearn.metrics import r2_score
+
+r2 = r2_score(y_true, y_pred)
+```
+
+| 指标 | 优点 | 缺点 |
+|------|------|------|
+| MSE | 可导，数学性质好 | 对异常值敏感 |
+| MAE | 对异常值鲁棒 | 不可导 |
+| RMSE | 与目标同量纲 | 对异常值敏感 |
+| R² | 标准化，易比较 | 可能为负 |
+
+## 交叉验证
+
+### K 折交叉验证
+
+将数据分成 K 份，轮流用 K-1 份训练，1 份验证：
+
+```python
+from sklearn.model_selection import cross_val_score
+from sklearn.linear_model import LogisticRegression
+
+model = LogisticRegression()
+scores = cross_val_score(model, X, y, cv=5, scoring='accuracy')
+
+print(f"交叉验证分数: {scores}")
+print(f"平均分数: {scores.mean():.4f} (+/- {scores.std():.4f})")
+```
+
+### 分层 K 折
+
+保持每折中各类别的比例：
+
+```python
+from sklearn.model_selection import StratifiedKFold
+
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+scores = cross_val_score(model, X, y, cv=cv, scoring='f1')
+```
+
+## 完整评估示例
+
+```python
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.metrics import (classification_report, confusion_matrix,
+                            accuracy_score, precision_score, recall_score,
+                            f1_score, roc_auc_score)
+from sklearn.linear_model import LogisticRegression
+from sklearn.datasets import make_classification
+import numpy as np
+
+# 生成数据
+X, y = make_classification(n_samples=1000, n_classes=2, 
+                           n_features=20, random_state=42)
+
+# 划分数据
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+# 训练模型
+model = LogisticRegression()
+model.fit(X_train, y_train)
+
+# 预测
+y_pred = model.predict(X_test)
+y_prob = model.predict_proba(X_test)[:, 1]
+
+# 评估
+print("=== 分类报告 ===")
+print(classification_report(y_test, y_pred))
+
+print("\n=== 混淆矩阵 ===")
+print(confusion_matrix(y_test, y_pred))
+
+print("\n=== 各项指标 ===")
+print(f"准确率: {accuracy_score(y_test, y_pred):.4f}")
+print(f"精确率: {precision_score(y_test, y_pred):.4f}")
+print(f"召回率: {recall_score(y_test, y_pred):.4f}")
+print(f"F1 分数: {f1_score(y_test, y_pred):.4f}")
+print(f"AUC: {roc_auc_score(y_test, y_prob):.4f}")
+
+# 交叉验证
+cv_scores = cross_val_score(model, X, y, cv=5, scoring='f1')
+print(f"\n=== 交叉验证 (F1) ===")
+print(f"分数: {cv_scores}")
+print(f"均值: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
+```
+
+## 小结
+
+| 任务 | 常用指标 |
+|------|---------|
+| 分类（平衡） | 准确率 |
+| 分类（不平衡） | 精确率、召回率、F1 |
+| 分类（概率） | AUC-ROC |
+| 回归 | MSE、MAE、R² |
+| 通用 | 交叉验证 |
+
+## 练习
+
+1. 对不平衡数据集（如 1:10 的正负比例），分别计算准确率、精确率、召回率、F1，观察哪个指标最能反映真实性能。
+
+2. 绘制 ROC 曲线，并计算不同阈值下的精确率和召回率。
+
+3. 比较 3 折、5 折、10 折交叉验证的结果差异。

@@ -1,0 +1,405 @@
+---
+title: 10 过拟合与正则化
+description: L1/L2正则化、交叉验证、学习曲线
+---
+
+# 10 过拟合与正则化
+
+过拟合是机器学习中最常见的问题之一。理解它并掌握正则化技术，是构建鲁棒模型的关键。
+
+## 为什么需要正则化
+
+### 模型复杂度的权衡
+
+机器学习面临一个永恒的矛盾：
+
+| 模型复杂度 | 训练集表现 | 测试集表现 | 原因 |
+|-----------|-----------|-----------|------|
+| **太简单** | 差 | 差 | 欠拟合，无法捕捉数据规律 |
+| **适中** | 好 | 好 | 正常拟合，泛化能力强 |
+| **太复杂** | 极好 | 差 | 过拟合，记住了噪声 |
+
+**偏差-方差权衡**：
+- **偏差（Bias）**：模型对真实关系的错误假设，导致系统性的预测错误
+- **方差（Variance）**：模型对训练数据微小变化的敏感程度
+- **目标**：在偏差和方差之间找到平衡点
+
+```
+误差 = 偏差² + 方差 + 噪声
+```
+
+### 正则化的本质
+
+正则化通过在损失函数中添加**惩罚项**，限制模型参数的大小，从而降低模型复杂度：
+
+$$J(\boldsymbol{\theta}) = \text{损失函数} + \lambda \cdot \text{惩罚项}$$
+
+其中 $$\lambda$$ 是正则化强度，控制惩罚的力度。
+
+## 什么是过拟合
+
+### 三种拟合状态
+
+| 状态 | 训练集表现 | 测试集表现 | 原因 |
+|------|-----------|-----------|------|
+| **欠拟合** | 差 | 差 | 模型太简单 |
+| **正常拟合** | 好 | 好 | 模型复杂度适中 |
+| **过拟合** | 极好 | 差 | 模型太复杂，记住了噪声 |
+
+### 直观理解
+
+- **欠拟合**：学生连课本都没看懂
+- **正常拟合**：学生理解了知识，能举一反三
+- **过拟合**：学生把例题答案全背下来了，换道题就不会
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.linear_model import LinearRegression
+
+# 生成数据
+np.random.seed(42)
+X = np.linspace(0, 10, 20)
+y = np.sin(X) + np.random.randn(20) * 0.3
+
+X = X.reshape(-1, 1)
+
+# 不同复杂度的模型
+fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+degrees = [1, 3, 15]
+titles = ['Underfitting (degree=1)', 'Good Fit (degree=3)', 'Overfitting (degree=15)']
+
+for ax, degree, title in zip(axes, degrees, titles):
+    # 多项式特征
+    poly = PolynomialFeatures(degree=degree)
+    X_poly = poly.fit_transform(X)
+    
+    # 拟合
+    model = LinearRegression()
+    model.fit(X_poly, y)
+    
+    # 预测
+    X_test = np.linspace(0, 10, 100).reshape(-1, 1)
+    X_test_poly = poly.transform(X_test)
+    y_pred = model.predict(X_test_poly)
+    
+    # 绘制
+    ax.scatter(X, y, color='blue', alpha=0.6, label='Data')
+    ax.plot(X_test, y_pred, color='red', label='Model')
+    ax.set_title(title)
+    ax.set_xlabel('X')
+    ax.set_ylabel('y')
+    ax.legend()
+    ax.set_ylim(-2, 2)
+
+plt.tight_layout()
+plt.show()
+```
+
+
+![过拟合与欠拟合对比](/images/10-overfit.png)
+
+*过拟合与欠拟合对比*
+
+## 检测过拟合
+
+### 学习曲线
+
+观察训练集和验证集误差随样本数量的变化：
+
+```python
+from sklearn.model_selection import learning_curve
+import matplotlib.pyplot as plt
+
+def plot_learning_curve(model, X, y, cv=5):
+    train_sizes, train_scores, test_scores = learning_curve(
+        model, X, y, cv=cv, n_jobs=-1,
+        train_sizes=np.linspace(0.1, 1.0, 10),
+        scoring='neg_mean_squared_error'
+    )
+    
+    train_scores_mean = -np.mean(train_scores, axis=1)
+    test_scores_mean = -np.mean(test_scores, axis=1)
+    
+    plt.plot(train_sizes, train_scores_mean, 'o-', color='r', label='Training Error')
+    plt.plot(train_sizes, test_scores_mean, 'o-', color='g', label='Validation Error')
+    plt.xlabel('Training Set Size')
+    plt.ylabel('MSE')
+    plt.legend()
+    plt.title('Learning Curve')
+    plt.show()
+
+# 使用
+from sklearn.linear_model import LinearRegression
+plot_learning_curve(LinearRegression(), X, y)
+```
+
+**学习曲线解读**：
+
+| 情况 | 训练误差 | 验证误差 | 含义 |
+|------|---------|---------|------|
+| 欠拟合 | 高 | 高，接近训练误差 | 模型太简单 |
+| 过拟合 | 很低 | 高，远离训练误差 | 模型太复杂 |
+| 正常 | 低 | 低，接近训练误差 | 模型合适 |
+
+## 正则化
+
+### L2 正则化（Ridge）
+
+在损失函数中加入权重的平方和：
+
+$$J(\mathbf{w}) = \text{MSE} + \lambda \sum_{j=1}^{n} w_j^2$$
+
+```python
+from sklearn.linear_model import Ridge
+
+model = Ridge(alpha=1.0)  # alpha = λ
+model.fit(X_train, y_train)
+```
+
+**特点**：
+- 权重趋向于小值，但不会为零
+- 也叫"权重衰减"
+- 适合所有特征都有用的情况
+
+### L1 正则化（Lasso）
+
+在损失函数中加入权重的绝对值和：
+
+$$J(\mathbf{w}) = \text{MSE} + \lambda \sum_{j=1}^{n} |w_j|$$
+
+```python
+from sklearn.linear_model import Lasso
+
+model = Lasso(alpha=0.1)
+model.fit(X_train, y_train)
+```
+
+**特点**：
+- 可以产生稀疏解（部分权重变为0）
+- 自动进行特征选择
+- 适合特征很多，但只有部分重要的情况
+
+### L1 vs L2 对比
+
+| 特性 | L1 (Lasso) | L2 (Ridge) |
+|------|-----------|-----------|
+| 惩罚项 | \|w\| | w² |
+| 解的稀疏性 | 稀疏（部分权重为0） | 不稀疏（权重都很小） |
+| 特征选择 | 自动选择 | 不选择 |
+| 计算稳定性 | 可能不稳定 | 稳定 |
+| 适用场景 | 高维数据，特征选择 | 多重共线性，所有特征都有用 |
+
+### 弹性网络（Elastic Net）
+
+结合 L1 和 L2：
+
+$$J(\mathbf{w}) = \text{MSE} + \lambda_1 \sum|w_j| + \lambda_2 \sum w_j^2$$
+
+```python
+from sklearn.linear_model import ElasticNet
+
+model = ElasticNet(alpha=0.1, l1_ratio=0.5)
+model.fit(X_train, y_train)
+```
+
+## 其他防止过拟合的方法
+
+### 1. 增加数据
+
+更多数据可以帮助模型学到真正的规律，而不是噪声。
+
+### 2. 简化模型
+
+减少模型复杂度：
+- 减少多项式次数
+- 减少神经网络层数/神经元数
+- 减少决策树深度
+
+### 3. 早停（Early Stopping）
+
+在验证集误差开始上升时停止训练：
+
+```python
+from sklearn.linear_model import SGDRegressor
+from sklearn.model_selection import train_test_split
+
+# 划分训练集和验证集
+X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2)
+
+model = SGDRegressor(max_iter=1, warm_start=True, penalty=None)
+
+best_val_loss = float('inf')
+patience = 10
+no_improve = 0
+
+for epoch in range(1000):
+    model.partial_fit(X_train, y_train)
+    
+    val_loss = np.mean((model.predict(X_val) - y_val) ** 2)
+    
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        no_improve = 0
+    else:
+        no_improve += 1
+    
+    if no_improve >= patience:
+        print(f"Early stopping at epoch {epoch}")
+        break
+```
+
+### 4. Dropout（神经网络）
+
+训练时随机丢弃部分神经元，防止共适应：
+
+```python
+import torch.nn as nn
+
+# 定义带 Dropout 的网络
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(10, 50)
+        self.dropout = nn.Dropout(p=0.5)  # 50% 丢弃率
+        self.fc2 = nn.Linear(50, 1)
+    
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        x = self.dropout(x)  # 只在训练时生效
+        x = self.fc2(x)
+        return x
+```
+
+### 5. 数据增强
+
+通过对训练数据进行变换来增加数据量：
+
+```python
+from sklearn.utils import resample
+
+# 自助采样
+X_augmented, y_augmented = resample(X_train, y_train, 
+                                     n_samples=len(X_train) * 2,
+                                     random_state=42)
+```
+
+
+![偏差-方差分解示意](/images/10-bias-variance.png)
+
+*偏差-方差分解示意*
+
+## 正则化强度调参
+
+### 交叉验证选择 λ
+
+```python
+from sklearn.linear_model import RidgeCV
+
+# 自动选择最佳 alpha
+model = RidgeCV(alphas=[0.001, 0.01, 0.1, 1, 10, 100], cv=5)
+model.fit(X_train, y_train)
+
+print(f"最佳 alpha: {model.alpha_}")
+```
+
+### 可视化正则化效果
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.linear_model import Ridge
+
+alphas = np.logspace(-4, 4, 100)
+coefs = []
+
+for alpha in alphas:
+    model = Ridge(alpha=alpha)
+    model.fit(X_train, y_train)
+    coefs.append(model.coef_)
+
+coefs = np.array(coefs)
+
+plt.plot(alphas, coefs)
+plt.xscale('log')
+plt.xlabel('alpha')
+plt.ylabel('Coefficients')
+plt.title('Ridge Coefficients vs Regularization Strength')
+plt.show()
+```
+
+## 完整示例
+
+```python
+import numpy as np
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+from sklearn.linear_model import LinearRegression, Ridge, Lasso
+from sklearn.metrics import mean_squared_error
+import matplotlib.pyplot as plt
+
+# 生成数据
+np.random.seed(42)
+X = np.linspace(0, 10, 100).reshape(-1, 1)
+y = np.sin(X.ravel()) + np.random.randn(100) * 0.3
+
+# 划分数据
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+
+# 多项式特征
+poly = PolynomialFeatures(degree=15)
+X_train_poly = poly.fit_transform(X_train)
+X_test_poly = poly.transform(X_test)
+
+# 标准化
+scaler = StandardScaler()
+X_train_poly = scaler.fit_transform(X_train_poly)
+X_test_poly = scaler.transform(X_test_poly)
+
+# 不同模型
+models = {
+    'Linear': LinearRegression(),
+    'Ridge (α=0.1)': Ridge(alpha=0.1),
+    'Ridge (α=10)': Ridge(alpha=10),
+    'Lasso (α=0.01)': Lasso(alpha=0.01),
+}
+
+# 训练和评估
+for name, model in models.items():
+    model.fit(X_train_poly, y_train)
+    
+    train_pred = model.predict(X_train_poly)
+    test_pred = model.predict(X_test_poly)
+    
+    train_mse = mean_squared_error(y_train, train_pred)
+    test_mse = mean_squared_error(y_test, test_pred)
+    
+    print(f"{name}:")
+    print(f"  训练 MSE: {train_mse:.4f}")
+    print(f"  测试 MSE: {test_mse:.4f}")
+    print(f"  非零权重: {np.sum(model.coef_ != 0)}")
+    print()
+```
+
+## 小结
+
+| 方法 | 原理 | 适用场景 |
+|------|------|---------|
+| L2 正则化 | 惩罚大权重 | 多重共线性，所有特征都有用 |
+| L1 正则化 | 产生稀疏解 | 高维数据，特征选择 |
+| 弹性网络 | L1+L2 | 特征多且相关 |
+| 早停 | 验证集误差上升时停止 | 迭代训练 |
+| Dropout | 随机丢弃神经元 | 神经网络 |
+| 数据增强 | 增加训练数据 | 数据不足 |
+
+## 练习
+
+1. 用不同多项式次数拟合同一组数据，绘制训练误差和测试误差随复杂度的变化曲线。
+
+2. 比较 Ridge、Lasso、Elastic Net 在同一数据集上的表现，观察权重稀疏性的差异。
+
+3. 实现早停机制，观察不同 patience 值对最终模型性能的影响。
+
+4. 对过拟合的模型，尝试增加数据量，观察是否能缓解过拟合。

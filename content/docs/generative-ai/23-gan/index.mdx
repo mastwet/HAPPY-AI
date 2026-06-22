@@ -1,0 +1,815 @@
+---
+title: 23 生成对抗网络 GAN
+description: GAN 原理、WGAN、StyleGAN、条件 GAN
+---
+
+# 23 生成对抗网络 GAN
+
+生成对抗网络（Generative Adversarial Networks, GAN）是 2014 年 Ian Goodfellow 等人提出的生成式模型，一经发布便引爆了深度学习社区。Yann LeCun 称之为"过去十年机器学习领域最有趣的想法"。本章将带你深入理解 GAN 的原理、数学推导、训练难点以及一系列经典变体。
+
+## 23.1 GAN 思想起源
+
+### 23.1.1 监督 vs 无监督、判别 vs 生成
+
+机器学习模型可以分为两类：
+
+| 类型 | 目标 | 典型任务 |
+|------|------|----------|
+| **判别模型** $p(y \vert x)$ | 学习输入到标签的映射 | 分类、回归 |
+| **生成模型** $p(x)$ 或 $p(x \vert y)$ | 学习数据分布本身，能采样新样本 | 图像生成、密度估计 |
+
+生成模型无需标签，能够捕捉数据的内在结构，因而在图像合成、文本生成、语音合成等领域具有广阔的应用前景。
+
+### 23.1.2 二人零和博弈
+
+GAN 的核心灵感来自博弈论中的**二人零和博弈（Two-player Zero-sum Game）**：
+
+- 两个参与者利益完全对立，一方所得即另一方所失
+- 双方都采取**最优策略**时，达到**纳什均衡**
+
+在 GAN 中，生成器 G 与判别器 D 就是两个对弈者：
+- G 想骗过 D（生成真实样本）
+- D 想识破 G（正确分辨真伪）
+
+当两者达到纳什均衡时，D 无法分辨样本来自真实数据还是 G，即 $D(x) = 0.5$，此时 G 就学会了真实数据的分布。
+
+### 23.1.3 为什么 GAN 重要
+
+> "GAN is the most interesting idea in the last ten years in machine learning."  
+> —— Yann LeCun
+
+GAN 的成功之处在于：
+- 摆脱了对显式密度函数的依赖
+- 提供了一个统一的对抗训练框架
+- 推动了图像生成的飞跃（StyleGAN、BigGAN、DALL-E 等）
+
+## 23.2 GAN 的直观理解
+
+### 23.2.1 假币制造者 vs 警察
+
+想象一个经典的场景：
+
+- **假币制造者（Generator G）**：从未见过真币，希望制造出能骗过警察的假币
+- **警察（Discriminator D）**：见过大量真币，要从流通货币中识别出假币
+
+最初，假币粗糙，警察一眼识破。警察告诉制造者哪里露馅，制造者改进工艺，做出更逼真的假币。警察也提升鉴别能力。如此循环往复，直到警察无法区分真假。
+
+这就是 GAN 的本质——**对抗中的共同进化**。
+
+### 23.2.2 网络结构
+
+- **生成器 G**：以随机噪声 $z \sim p_z$（通常为标准正态分布）为输入，输出合成样本 $G(z)$
+- **判别器 D**：以图像（真实或生成）为输入，输出该图像为真实图像的概率 $D(x) \in [0,1]$
+
+数据流：
+
+$$z \sim p_z \xrightarrow{G} G(z) \xrightarrow{D} D(G(z)) \in [0,1]$$
+
+$$x \sim p_{data} \xrightarrow{D} D(x) \in [0,1]$$
+
+## 23.3 数学推导
+
+### 23.3.1 极小极大博弈
+
+Goodfellow 在原始论文中提出的 GAN 目标函数：
+
+$$\min_G \max_D V(D,G) = \mathbb{E}_{x \sim p_{data}}[\log D(x)] + \mathbb{E}_{z \sim p_z}[\log(1 - D(G(z)))]$$
+
+**判别器 D 的目标**：最大化 $V(D,G)$
+- 让真实样本的 $D(x)$ 接近 1
+- 让生成样本的 $D(G(z))$ 接近 0
+- 即希望 $\log D(x)$ 大、$\log(1-D(G(z)))$ 大
+
+**生成器 G 的目标**：最小化 $V(D,G)$
+- 让 $D(G(z))$ 接近 1
+- 即希望 $\log(1-D(G(z)))$ 小
+
+### 23.3.2 推导 D 的最优解
+
+固定 G，求使 $V(D,G)$ 最大的 D：
+
+$$V(D,G) = \int_x p_{data}(x) \log D(x) dx + \int_z p_z(z) \log(1 - D(G(z))) dz$$
+
+$$= \int_x \left[ p_{data}(x) \log D(x) + p_g(x) \log(1 - D(x)) \right] dx$$
+
+对 $D(x)$ 求导并令其为零：
+
+$$\frac{p_{data}(x)}{D(x)} - \frac{p_g(x)}{1 - D(x)} = 0$$
+
+解得最优判别器：
+
+$$D^*(x) = \frac{p_{data}(x)}{p_{data}(x) + p_g(x)}$$
+
+### 23.3.3 证明等价于最小化 JS 散度
+
+将 $D^*$ 代回 $V$：
+
+$$V(D^*, G) = \mathbb{E}_{x \sim p_{data}} \left[ \log \frac{p_{data}(x)}{p_{data}(x) + p_g(x)} \right] + \mathbb{E}_{x \sim p_g} \left[ \log \frac{p_g(x)}{p_{data}(x) + p_g(x)} \right]$$
+
+令 $p_a = \frac{1}{2}(p_{data} + p_g)$，经过变换可得：
+
+$$V(D^*, G) = 2 \cdot \text{JS}(p_{data} \| p_g) - 2 \log 2$$
+
+**结论**：当 D 达到最优时，G 的优化目标等价于最小化 $p_{data}$ 与 $p_g$ 之间的 **JS 散度**。
+
+## 23.4 GAN 训练过程
+
+### 23.4.1 交替更新
+
+由于 G 和 D 的目标相反，无法同步优化。实际训练采用**交替更新**策略：
+
+```
+for 训练轮数:
+    # 1. 训练判别器 K 次
+    for k in 1..K:
+        采样真实样本 x ~ p_data
+        采样噪声 z ~ p_z
+        最大化 log D(x) + log(1 - D(G(z)))
+        更新 D 的参数
+    
+    # 2. 训练生成器 1 次
+    采样噪声 z ~ p_z
+    最小化 log(1 - D(G(z)))  # 或最大化 log D(G(z))
+    更新 G 的参数
+```
+
+通常 $K = 1$ 即可，目标是让 D 略强于 G，但不至于过强。
+
+### 23.4.2 训练技巧
+
+| 技巧 | 说明 |
+|------|------|
+| **输入归一化** | 真实图像归一化到 $[-1, 1]$，与 G 的 Tanh 输出匹配 |
+| **采样噪声** | $z$ 从高斯分布采样，避免使用均匀分布 |
+| **优化器** | Adam，$\beta_1 = 0.5$，$\text{lr} = 0.0002$ |
+| **LeakyReLU** | D 中使用 LeakyReLU(0.2)，避免梯度为零 |
+| **Separate batches** | 真假样本分别组成小批量 |
+
+### 23.4.3 常见问题：模式崩溃
+
+**模式崩溃（Mode Collapse）** 是 GAN 最常见的问题之一：
+
+- G 找到少数几个能骗过 D 的样本，就反复生成这些"安全"样本
+- 表面上 G 的损失下降，但样本多样性极差
+- 一个生成 10 种数字的 GAN，可能只会生成"1"和"7"
+
+根本原因在于原始 GAN 等价于优化**逆向 KL 散度** $\text{KL}(p_g \| p_{data})$：
+
+$$\arg\min_G \text{KL}(p_g \| p_{data}) - 2 \text{JS}(p_{data} \| p_g)$$
+
+逆向 KL 散度倾向于"避险"——宁可覆盖不到某些模式，也要在已知模式上做精。
+
+## 23.5 训练不稳定的根本原因
+
+### 23.5.1 JS 散度的问题
+
+JS 散度在两个分布**没有重叠**时为常数：
+
+$$\text{JS}(p_{data} \| p_g) = \log 2 \quad \text{（当 } p_{data} \cap p_g = \emptyset \text{）}$$
+
+这意味着：
+- 在训练的早期阶段，$p_g$ 与 $p_{data}$ 几乎不重叠
+- D 可以轻易区分真假，最优 $D^*$ 在生成样本处的输出为 0
+- 此时 G 的梯度为零，**梯度消失**，无法学习
+
+更糟的是，高维空间中两个低维流形的测度为零，几乎不可能有"重叠"。
+
+### 23.5.2 解决方案概览
+
+| 方案 | 核心思想 |
+|------|----------|
+| **WGAN** | 用 Wasserstein 距离替代 JS 散度 |
+| **WGAN-GP** | 用梯度惩罚代替权重裁剪 |
+| **谱归一化 SNGAN** | 约束 D 的 Lipschitz 常数 |
+| **梯度惩罚** | 显式约束 $\|\nabla_x D(x)\| \leq 1$ |
+
+## 23.6 手写数字实战（GAN）
+
+下面用 PyTorch 实现一个最简的 GAN，在 MNIST 上生成手写数字。
+
+### 23.6.1 数据准备
+
+```python
+import os
+import torch
+import torch.nn as nn
+import torchvision
+from torchvision import transforms
+from torchvision.utils import save_image
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+latent_size = 64
+hidden_size = 256
+image_size = 784
+num_epochs = 50
+batch_size = 100
+sample_dir = 'samples'
+
+os.makedirs(sample_dir, exist_ok=True)
+
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5], std=[0.5])  # 归一化到 [-1, 1]
+])
+
+mnist = torchvision.datasets.MNIST('./data', train=True,
+                                    transform=transform, download=True)
+data_loader = torch.utils.data.DataLoader(mnist, batch_size=batch_size,
+                                           shuffle=True)
+```
+
+### 23.6.2 模型定义
+
+```python
+# 判别器：输入图像，输出二分类概率
+D = nn.Sequential(
+    nn.Linear(image_size, hidden_size),
+    nn.LeakyReLU(0.2),
+    nn.Linear(hidden_size, hidden_size),
+    nn.LeakyReLU(0.2),
+    nn.Linear(hidden_size, 1),
+    nn.Sigmoid()
+).to(device)
+
+# 生成器：输入噪声，输出一张图
+G = nn.Sequential(
+    nn.Linear(latent_size, hidden_size),
+    nn.ReLU(),
+    nn.Linear(hidden_size, hidden_size),
+    nn.ReLU(),
+    nn.Linear(hidden_size, image_size),
+    nn.Tanh()  # 输出范围 [-1, 1]
+).to(device)
+
+criterion = nn.BCELoss()
+d_optimizer = torch.optim.Adam(D.parameters(), lr=0.0002)
+g_optimizer = torch.optim.Adam(G.parameters(), lr=0.0002)
+
+
+def denorm(x):
+    """反归一化：[-1, 1] -> [0, 1]"""
+    return (x + 1) / 2
+```
+
+### 23.6.3 训练循环
+
+```python
+total_step = len(data_loader)
+for epoch in range(num_epochs):
+    for i, (images, _) in enumerate(data_loader):
+        images = images.reshape(batch_size, -1).to(device)
+        real_labels = torch.ones(batch_size, 1).to(device)
+        fake_labels = torch.zeros(batch_size, 1).to(device)
+
+        # ============ 训练判别器 ============
+        # 真样本损失
+        real_outputs = D(images)
+        d_loss_real = criterion(real_outputs, real_labels)
+
+        # 假样本损失
+        z = torch.randn(batch_size, latent_size).to(device)
+        fake_images = G(z)
+        fake_outputs = D(fake_images.detach())
+        d_loss_fake = criterion(fake_outputs, fake_labels)
+
+        d_loss = d_loss_real + d_loss_fake
+        d_optimizer.zero_grad()
+        d_loss.backward()
+        d_optimizer.step()
+
+        # ============ 训练生成器 ============
+        # 最大化 log D(G(z))，等价于最小化 log(1 - D(G(z)))
+        z = torch.randn(batch_size, latent_size).to(device)
+        fake_images = G(z)
+        outputs = D(fake_images)
+        g_loss = criterion(outputs, real_labels)  # 目标是让 D 把假样本判为真
+
+        g_optimizer.zero_grad()
+        g_loss.backward()
+        g_optimizer.step()
+
+        if (i + 1) % 200 == 0:
+            print(f'Epoch [{epoch+1}/{num_epochs}], Step [{i+1}/{total_step}], '
+                  f'd_loss: {d_loss.item():.4f}, g_loss: {g_loss.item():.4f}, '
+                  f'D(x): {real_outputs.mean().item():.2f}, '
+                  f'D(G(z)): {fake_outputs.mean().item():.2f}')
+
+    # 保存样本
+    fake_images = fake_images.reshape(fake_images.size(0), 1, 28, 28)
+    save_image(denorm(fake_images),
+               os.path.join(sample_dir, f'fake_images-{epoch+1:03d}.png'))
+```
+
+### 23.6.4 训练过程观察
+
+训练初期（D 太强）：
+
+```
+D(x): 0.98, D(G(z)): 0.05   # D 几乎完美
+g_loss: 大                  # G 难以进步
+```
+
+训练中期：
+
+```
+D(x): 0.70, D(G(z)): 0.30   # G 开始骗过 D
+g_loss: 下降
+```
+
+训练收敛：
+
+```
+D(x): 0.50, D(G(z)): 0.50   # 纳什均衡附近
+```
+
+## 23.7 WGAN：用 Wasserstein 距离取代 JS 散度
+
+### 23.7.1 Wasserstein 距离
+
+Wasserstein-1 距离（推土机距离，EM 距离）定义为：
+
+$$W(p_{data}, p_g) = \inf_{\gamma \sim \Gamma(p_{data}, p_g)} \mathbb{E}_{(x,y) \sim \gamma} [\|x - y\|]$$
+
+直观理解：把一堆"土"（$p_{data}$）搬运成另一堆"土"（$p_g$）的最小代价。
+
+**关键优势**：即使两个分布没有重叠，Wasserstein 距离依然能反映它们的远近。
+
+| 距离 | 无重叠时 |
+|------|----------|
+| KL 散度 | $+\infty$ |
+| JS 散度 | $\log 2$（常数） |
+| **Wasserstein** | **连续变化，能反映远近** |
+
+### 23.7.2 WGAN 的目标函数
+
+通过 Kantorovich-Rubinstein 对偶，WGAN 的判别器（也叫 critic）目标为：
+
+$$\max_{D: \|D\|_L \leq 1} \mathbb{E}_{x \sim p_{data}}[D(x)] - \mathbb{E}_{z \sim p_z}[D(G(z))]$$
+
+这里 D 不再是分类器，而是要满足 **1-Lipschitz 约束**：
+
+$$\|D(x_1) - D(x_2)\| \leq \|x_1 - x_2\|$$
+
+直观上，D 的输出变化率不能超过输入的变化率。
+
+### 23.7.3 权重裁剪实现 Lipschitz 约束
+
+最简单的方式是**权重裁剪（Weight Clipping）**：
+
+```python
+# WGAN 训练关键代码
+for p in D.parameters():
+    p.data.clamp_(-0.01, 0.01)  # 限制判别器参数
+```
+
+### 23.7.4 WGAN 完整实现要点
+
+```python
+# 判别器（critic）：输出无 Sigmoid
+D = nn.Sequential(
+    nn.Linear(image_size, hidden_size),
+    nn.LeakyReLU(0.2),
+    nn.Linear(hidden_size, hidden_size),
+    nn.LeakyReLU(0.2),
+    nn.Linear(hidden_size, 1)  # 无 Sigmoid
+).to(device)
+
+# 训练
+d_optimizer = torch.optim.RMSprop(D.parameters(), lr=0.00005)  # WGAN 推荐 RMSprop
+
+for epoch in range(num_epochs):
+    for i, (images, _) in enumerate(data_loader):
+        # 训练 critic 多次
+        for _ in range(5):  # WGAN 建议 n_critic=5
+            images = images.reshape(batch_size, -1).to(device)
+            d_real = D(images).mean()
+
+            z = torch.randn(batch_size, latent_size).to(device)
+            fake_images = G(z)
+            d_fake = D(fake_images.detach()).mean()
+
+            d_loss = -(d_real - d_fake)  # 最大化 d_real - d_fake
+            d_optimizer.zero_grad()
+            d_loss.backward()
+            d_optimizer.step()
+
+            # 权重裁剪
+            for p in D.parameters():
+                p.data.clamp_(-0.01, 0.01)
+
+        # 训练生成器
+        z = torch.randn(batch_size, latent_size).to(device)
+        fake_images = G(z)
+        g_loss = -D(fake_images).mean()  # 最大化 D(G(z))
+
+        g_optimizer.zero_grad()
+        g_loss.backward()
+        g_optimizer.step()
+```
+
+### 23.7.5 WGAN 的优势
+
+- **训练更稳定**：loss 与生成质量强相关，可作为早停依据
+- **无模式崩溃**：理论上不易出现（实践中仍有）
+- **理论保证**：严格最小化 Wasserstein 距离
+
+## 23.8 WGAN-GP：用梯度惩罚代替权重裁剪
+
+### 23.8.1 权重裁剪的问题
+
+- 难以精确满足 1-Lipschitz 条件
+- 容量受限：裁剪过严则 D 太弱，过松则违反约束
+- 容易导致梯度消失或爆炸
+
+### 23.8.2 梯度惩罚
+
+Gulrajani 等人提出**梯度惩罚（Gradient Penalty）**：
+
+$$\text{GP} = \lambda \mathbb{E}_{\hat{x} \sim p_{\hat{x}}} \left[ \left( \|\nabla_{\hat{x}} D(\hat{x})\|_2 - 1 \right)^2 \right]$$
+
+其中 $\hat{x}$ 是真实样本与生成样本之间的**线性插值**：
+
+$$\hat{x} = \alpha x + (1 - \alpha) G(z), \quad \alpha \sim U[0, 1]$$
+
+直觉：约束 D 在"真实-生成"之间的过渡区域的梯度范数为 1。
+
+### 23.8.3 WGAN-GP 实现
+
+```python
+import torch.autograd as autograd
+
+lambda_gp = 10
+
+for epoch in range(num_epochs):
+    for i, (images, _) in enumerate(data_loader):
+        images = images.reshape(batch_size, -1).to(device)
+
+        # 1. 计算 D 的 Wasserstein 损失
+        d_real = D(images)
+        z = torch.randn(batch_size, latent_size).to(device)
+        fake_images = G(z)
+        d_fake = D(fake_images.detach())
+
+        # 2. 计算梯度惩罚
+        alpha = torch.rand(batch_size, 1).to(device)
+        x_hat = (alpha * images + (1 - alpha) * fake_images.detach()).requires_grad_(True)
+
+        d_hat = D(x_hat)
+        gradients = autograd.grad(
+            outputs=d_hat,
+            inputs=x_hat,
+            grad_outputs=torch.ones_like(d_hat),
+            create_graph=True,
+            retain_graph=True
+        )[0]
+
+        gradient_penalty = ((gradients.view(gradients.size(0), -1).norm(2, dim=1) - 1) ** 2).mean()
+
+        # 3. 总损失
+        d_loss = d_fake.mean() - d_real.mean() + lambda_gp * gradient_penalty
+
+        d_optimizer.zero_grad()
+        d_loss.backward()
+        d_optimizer.step()
+
+        # 训练 G（与 WGAN 相同）
+        z = torch.randn(batch_size, latent_size).to(device)
+        fake_images = G(z)
+        g_loss = -D(fake_images).mean()
+
+        g_optimizer.zero_grad()
+        g_loss.backward()
+        g_optimizer.step()
+```
+
+### 23.8.4 训练要点
+
+- 优化器仍用 Adam（$\text{lr}=0.0001$，$\beta_1=0$，$\beta_2=0.9$）
+- 每轮 G 更新 1 次，D 更新 1 次（无需 n_critic > 1）
+- $\lambda_{gp} = 10$ 是常用值
+- **不要**对 D 使用 BatchNorm（破坏 Lipschitz 约束），改用 LayerNorm 或不加
+
+## 23.9 谱归一化 GAN（SNGAN）
+
+### 23.9.1 核心思想
+
+Miyato 等人提出**谱归一化（Spectral Normalization）**：通过约束 D 中每一层权重矩阵的**谱范数**为 1，来保证整个网络满足 1-Lipschitz 条件。
+
+### 23.9.2 谱范数
+
+对于权重矩阵 $W$，其谱范数为最大奇异值：
+
+$$\sigma(W) = \max_{\|x\|=1} \|Wx\|$$
+
+### 23.9.3 谱归一化
+
+将权重除以其谱范数：
+
+$$\bar{W}_{SN} = \frac{W}{\sigma(W)}$$
+
+这样每一层的 Lipschitz 常数为 1，整个网络也满足 1-Lipschitz。
+
+### 23.9.4 功率迭代（Power Iteration）
+
+直接计算谱范数代价昂贵，采用**幂迭代法**近似：
+
+```python
+def power_iteration(W, u, n_iter=1):
+    """计算 W 的最大奇异值对应的奇异向量"""
+    for _ in range(n_iter):
+        v = F.normalize(torch.mv(W.T, u), dim=0)
+        u = F.normalize(torch.mv(W, v), dim=0)
+    sigma = torch.dot(u, torch.mv(W, v))
+    return sigma, u, v
+
+
+class SpectralNorm(nn.Module):
+    """谱归一化层"""
+    def __init__(self, module, n_iter=1):
+        super().__init__()
+        self.module = module
+        self.n_iter = n_iter
+        # 初始化 u 向量
+        weight = module.weight
+        h, w = weight.shape[0], weight.shape[1] if weight.ndim > 1 else 1
+        self.register_buffer('u', torch.randn(h))
+        self.register_buffer('v', torch.randn(w))
+
+    def forward(self, x):
+        weight = self.module.weight
+        for _ in range(self.n_iter):
+            self.v = F.normalize(torch.mv(weight.t(), self.u), dim=0, eps=1e-12)
+            self.u = F.normalize(torch.mv(weight, self.v), dim=0, eps=1e-12)
+        sigma = torch.dot(self.u, torch.mv(weight, self.v))
+        return self.module(x) / sigma
+```
+
+PyTorch 已内置 `torch.nn.utils.spectral_norm`，可直接使用：
+
+```python
+D = nn.Sequential(
+    spectral_norm(nn.Linear(image_size, hidden_size)),
+    nn.LeakyReLU(0.2),
+    spectral_norm(nn.Linear(hidden_size, hidden_size)),
+    nn.LeakyReLU(0.2),
+    spectral_norm(nn.Linear(hidden_size, 1)),
+    nn.Sigmoid()
+)
+```
+
+## 23.10 条件 GAN（Conditional GAN, cGAN）
+
+### 23.10.1 动机
+
+原始 GAN 的输入是随机噪声，无法控制生成的内容。cGAN 通过引入条件信息 $c$（类别标签、文本、图像等），让生成过程可控。
+
+应用场景：
+- 给定类别标签生成对应数字
+- 给定文字描述生成对应图像
+- 给定低分辨率图像生成高分辨率图像
+
+### 23.10.2 cGAN 的目标函数
+
+$$\min_G \max_D V(D,G) = \mathbb{E}_{(x,c) \sim p_{data}}[\log D(x \vert c)] + \mathbb{E}_{z \sim p_z}[\log(1 - D(G(z \vert c)))]$$
+
+### 23.10.3 条件融合方式
+
+| 方式 | 实现 |
+|------|------|
+| **拼接** | 将 $c$ 的 embedding 与 $z$（或 $x$）拼接 |
+| **逐层注入** | 在每一层都注入条件（如 Projection cGAN） |
+| **AdaIN** | StyleGAN 通过 AdaIN 注入风格信息 |
+
+最简单的方式是拼接。
+
+### 23.10.4 条件生成器
+
+```python
+class ConditionalGenerator(nn.Module):
+    def __init__(self, latent_size=100, n_classes=10, embed_size=10):
+        super().__init__()
+        self.label_emb = nn.Embedding(n_classes, embed_size)
+        self.model = nn.Sequential(
+            nn.Linear(latent_size + embed_size, 256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(256, 512),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(512, 1024),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Linear(1024, 784),
+            nn.Tanh()
+        )
+
+    def forward(self, z, labels):
+        c = self.label_emb(labels)
+        x = torch.cat([z, c], dim=1)
+        return self.model(x).view(x.size(0), 1, 28, 28)
+```
+
+### 23.10.5 条件判别器
+
+```python
+class ConditionalDiscriminator(nn.Module):
+    def __init__(self, n_classes=10, embed_size=10):
+        super().__init__()
+        self.label_emb = nn.Embedding(n_classes, embed_size)
+        self.model = nn.Sequential(
+            nn.Linear(784 + embed_size, 512),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Dropout(0.4),
+            nn.Linear(512, 256),
+            nn.LeakyReLU(0.2, inplace=True),
+            nn.Dropout(0.4),
+            nn.Linear(256, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x, labels):
+        x = x.view(x.size(0), 784)
+        c = self.label_emb(labels)
+        return self.model(torch.cat([x, c], dim=1)).squeeze()
+```
+
+### 23.10.6 训练循环
+
+```python
+for epoch in range(num_epochs):
+    for images, labels in data_loader:
+        images, labels = images.to(device), labels.to(device)
+        batch_size = images.size(0)
+
+        real_labels_t = torch.ones(batch_size).to(device)
+        fake_labels_t = torch.zeros(batch_size).to(device)
+
+        # ===== 训练判别器 =====
+        # 真样本（图像 + 正确标签）
+        d_real = D(images, labels)
+        loss_d_real = criterion(d_real, real_labels_t)
+
+        # 假样本（生成 + 随机标签）
+        z = torch.randn(batch_size, 100).to(device)
+        gen_labels = torch.randint(0, 10, (batch_size,)).to(device)
+        fake_images = G(z, gen_labels)
+        d_fake = D(fake_images, gen_labels)
+        loss_d_fake = criterion(d_fake, fake_labels_t)
+
+        d_loss = loss_d_real + loss_d_fake
+        d_optimizer.zero_grad()
+        d_loss.backward()
+        d_optimizer.step()
+
+        # ===== 训练生成器 =====
+        z = torch.randn(batch_size, 100).to(device)
+        gen_labels = torch.randint(0, 10, (batch_size,)).to(device)
+        fake_images = G(z, gen_labels)
+        validity = D(fake_images, gen_labels)
+        g_loss = criterion(validity, real_labels_t)
+
+        g_optimizer.zero_grad()
+        g_loss.backward()
+        g_optimizer.step()
+
+# 生成指定数字
+def generate_digit(generator, digit):
+    z = torch.randn(1, 100).to(device)
+    label = torch.LongTensor([digit]).to(device)
+    img = generator(z, label).detach().cpu().view(28, 28)
+    return 0.5 * img + 0.5
+
+generate_digit(G, 8)  # 生成数字 8
+```
+
+训练完成后，固定标签 $c = i$，变化 $z$ 即可生成不同形态的数字 $i$。
+
+## 23.11 现代 GAN 简述
+
+### 23.11.1 StyleGAN（NVIDIA, 2019）
+
+StyleGAN 是高分辨率人脸生成的里程碑：
+
+- **Mapping Network**：$z \to w$，解耦潜在空间
+- **AdaIN（自适应实例归一化）**：在每一层注入风格信息
+- **Progressive Growing**：从 4×4 逐步增长到 1024×1024
+
+StyleGAN2 进一步解决了 StyleGAN 的"水滴伪影"问题。
+
+### 23.11.2 CycleGAN（2017）
+
+CycleGAN 实现**无配对图像翻译**：
+
+- 核心思想：$G: A \to B$ 与 $F: B \to A$ 互为逆映射
+- **循环一致性损失**：$F(G(a)) \approx a$
+- 应用：马 $\leftrightarrow$ 斑马、夏天 $\leftrightarrow$ 冬天、莫奈 $\leftrightarrow$ 照片
+
+### 23.11.3 ProgressiveGAN（2017）
+
+ProgressiveGAN（ProGAN）：
+
+- 从低分辨率开始训练，逐步增加层数提升分辨率
+- 每个分辨率阶段都先训练稳定，再添加新层
+- 优势：训练快、稳定性高
+
+### 23.11.4 BigGAN（2018）
+
+BigGAN 在 ImageNet 上生成了高质量、多样化的图像：
+
+- 大批量（2048）
+- 谱归一化
+- 自注意力
+- 截断技巧控制多样性与质量
+
+## 23.12 评估指标
+
+### 23.12.1 Inception Score（IS）
+
+IS 用预训练的 Inception 网络评估生成样本：
+
+$$\text{IS} = \exp\left( \mathbb{E}_x \left[ \text{KL}(p(y \vert x) \| p(y)) \right] \right)$$
+
+- 每个样本被分类器以高置信度判为某一类 → $p(y \vert x)$ 尖锐
+- 类别分布均匀 → $p(y)$ 平坦
+- 两者 KL 散度越大，IS 越高
+
+**优点**：简单、与人类评价有一定相关性。  
+**缺点**：无法检测过拟合、无法检测模式崩溃（只要生成清晰样本即可）。
+
+### 23.12.2 Fréchet Inception Distance（FID）
+
+FID 用 Inception 网络提取特征，然后计算两个高斯分布之间的 Fréchet 距离：
+
+$$\text{FID} = \|\mu_r - \mu_g\|^2 + \text{Tr}\left( \Sigma_r + \Sigma_g - 2(\Sigma_r \Sigma_g)^{1/2} \right)$$
+
+其中 $\mu_r, \Sigma_r$ 和 $\mu_g, \Sigma_g$ 分别是真实样本和生成样本特征的均值向量与协方差矩阵。
+
+**优点**：
+- 同时考虑质量与多样性
+- 对模式崩溃敏感
+- 与人类评价相关性更高
+
+**缺点**：
+- 假设特征服从高斯分布
+- 样本量小时偏差大
+- 计算量较大
+
+### 23.12.3 对比
+
+| 指标 | 质量 | 多样性 | 抗模式崩溃 | 计算成本 |
+|------|------|--------|------------|----------|
+| IS | $\checkmark$ | $\times$ | $\times$ | 低 |
+| FID | $\checkmark$ | $\checkmark$ | $\checkmark$ | 中 |
+
+实际中 **FID 是首选**指标。
+
+## 23.13 常见误区
+
+### 误区 1：判别器越强越好
+
+错。判别器过强会导致 G 梯度消失。**目标应是 D 与 G 能力均衡**。
+
+### 误区 2：损失越低模型越好
+
+对 GAN **不成立**。D 和 G 的损失都在波动才是正常的；只在纳什均衡附近才有意义。监控生成样本的质量（FID）更可靠。
+
+### 误区 3：GAN 适合所有生成任务
+
+错。GAN 训练难、对超参敏感；目前**文本生成**、**高维数据**更常用 VAE 或扩散模型。
+
+### 误区 4：模式崩溃可以彻底解决
+
+错。WGAN、WGAN-GP 等缓解了模式崩溃，但不能完全消除。**多生成器、unrolled GAN、minibatch discrimination** 等是经验性方案。
+
+### 误区 5：cGAN 比 GAN 更强大
+
+cGAN 只是在 GAN 基础上加了条件，并不解决 GAN 本身的训练问题。
+
+## 23.14 小结
+
+GAN 通过对抗训练巧妙地学习了复杂的数据分布，是深度生成模型的里程碑。本章要点：
+
+| 关键概念 | 含义 |
+|----------|------|
+| **极小极大博弈** | G 与 D 的对抗 |
+| **JS 散度等价** | 最优 D 时 G 的目标 = 最小化 JS 散度 |
+| **梯度消失** | JS 散度在分布不重叠时为常数，导致 G 无梯度 |
+| **Wasserstein 距离** | 解决梯度消失，几何性质更好 |
+| **1-Lipschitz 约束** | WGAN/SNGAN 都需要 |
+| **条件 GAN** | 通过条件信息控制生成 |
+
+GAN 的训练至今仍是实践中的艺术，但了解上述原理能帮你更快诊断问题。
+
+## 23.15 进一步阅读
+
+- **Goodfellow et al., 2014**, *Generative Adversarial Networks* — GAN 原始论文，**必读**
+- **Arjovsky et al., 2017**, *Wasserstein GAN* — WGAN 论文，用 Wasserstein 距离解决训练稳定性
+- **Gulrajani et al., 2017**, *Improved Training of Wasserstein GANs* — WGAN-GP，梯度惩罚
+- **Miyato et al., 2018**, *Spectral Normalization for GAN* — SNGAN
+- **Mirza & Osindero, 2014**, *Conditional GAN* — cGAN 原始论文
+- **Karras et al., 2019**, *A Style-Based Generator Architecture for Generative Adversarial Networks* — StyleGAN
+- **Karras et al., 2020**, *Analyzing and Improving the Image Quality of StyleGAN* — StyleGAN2
+- **Zhu et al., 2017**, *Unpaired Image-to-Image Translation using Cycle-Consistent Adversarial Networks* — CycleGAN
+- **Brock et al., 2018**, *Large Scale GAN Training for High Fidelity Natural Image Synthesis* — BigGAN
+
+中文资料推荐：
+- 邱锡鹏《神经网络与深度学习》第 13 章：生成式对抗网络
+- 李宏毅《GAN 专题》：GAN Lecture 系列（含 WGAN、cGAN 实操）

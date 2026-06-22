@@ -1,0 +1,838 @@
+---
+title: 32 从零搭建 LLM
+description: LLaMA2 全组件实现、MoE、生成策略
+---
+
+# 32 从零搭建 LLM：从架构到生成
+
+在前几章中，我们学习了 Transformer 的注意力机制（第 28 章）、RNN 到 Seq2Seq 的演进（第 27 章）、以及大模型的全景概览（第 31 章）。本章将把这些知识融会贯通，**从零开始用 PyTorch 实现一个完整的 LLaMA2 模型**，并在此基础上扩展 MoE（混合专家）架构、文本生成策略和上下文学习技术。
+
+这是整个 LLM 系列中**内容量最大、代码量最多**的一章。完成本章后，你将真正理解大模型的每一个组件是如何工作的。
+
+---
+
+## 32.1 LLaMA2 架构总览
+
+![LLaMA2 架构总览](/images/ch32_LLama2.png)
+
+
+LLaMA2 是 Meta 于 2023 年发布的开源大语言模型，采用了 **Decoder-Only** 架构。与原始 Transformer 相比，LLaMA2 进行了四项关键改进：
+
+| 组件 | 原始 Transformer | LLaMA2 |
+|------|-----------------|--------|
+| **归一化** | LayerNorm（Post-Norm） | RMSNorm（Pre-Norm） |
+| **位置编码** | 正弦/余弦绝对编码 | RoPE 旋转位置编码 |
+| **注意力** | 标准多头注意力（MHA） | 分组查询注意力（GQA） |
+| **激活函数** | ReLU / GELU | SwiGLU |
+
+这些改进并非随意选择，每一项都有明确的动机：
+
+- **RMSNorm** 相比 LayerNorm 去掉了均值中心化，计算更简单，训练更稳定。
+- **RoPE** 将位置信息通过旋转注入 Q/K 向量，天然支持相对位置和长度外推。
+- **GQA** 让多个 Query 头共享 Key/Value 头，大幅减少推理时的显存占用。
+- **SwiGLU** 引入门控机制，比 ReLU/GELU 具有更好的非线性表达能力。
+
+LLaMA2 的数据流可以概括为：
+
+1. **输入嵌入**：将 token\_ids 转换为词向量
+2. **N 层 Transformer Block 堆叠**：每层包含预归一化 + 注意力 + 预归一化 + 前馈网络，均带残差连接
+3. **最终归一化 + 线性输出层**：映射到词汇表 logits
+
+---
+
+## 32.2 RMSNorm
+
+标准的 Layer Normalization 包含两个步骤：减去均值、除以标准差。RMSNorm 简化了这个过程，只保留均方根缩放。
+
+### 32.2.1 公式
+
+$$\text{RMSNorm}(x) = \frac{x}{\sqrt{\frac{1}{n}\sum_{i=1}^{n}x_i^2 + \epsilon}} \cdot \gamma$$
+
+其中 $x_i$ 是输入向量的第 $i$ 个元素，$\gamma$ 是可学习的缩放参数，$n$ 是向量维度，$\epsilon$ 是防止除零的小常数。
+
+直觉上理解：RMSNorm 先计算输入向量的"能量"（各元素平方的均值），再用它的平方根倒数来缩放，使得输出的尺度保持稳定。相比 LayerNorm，它**不做均值中心化**，只做缩放，因此计算更快。
+
+### 32.2.2 PyTorch 实现
+
+```python
+import torch
+import torch.nn as nn
+
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-5):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def _norm(self, x):
+        # x.pow(2).mean(-1, keepdim=True) 计算各元素平方的均值
+        # torch.rsqrt 是平方根的倒数
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+
+    def forward(self, x):
+        output = self._norm(x.float()).type_as(x)
+        return output * self.weight
+```
+
+测试验证：
+
+```python
+norm = RMSNorm(dim=768, eps=1e-5)
+x = torch.randn(1, 50, 768)
+output = norm(x)
+print(output.shape)
+# torch.Size([1, 50, 768])
+```
+
+输出形状与输入一致，归一化不改变张量形状。
+
+---
+
+## 32.3 RoPE 旋转位置编码
+
+RoPE（Rotary Position Embedding）是 LLaMA2 中的位置编码方案。我们在第 29 章已经详细介绍了其数学原理，这里简要回顾核心思想并给出实现。
+
+### 32.3.1 核心思想
+
+传统位置编码通过**加法**将位置信息注入词嵌入，而 RoPE 通过**复数乘法**在注意力计算时旋转 Q 和 K 向量。具体来说：
+
+- 将向量的每对维度视为一个复数 $x_1 + ix_2$
+- 用模为 1 的复数 $e^{im\theta}$（$m$ 为位置）与之相乘
+- 复数乘法 = 旋转：只改变方向，不改变长度
+
+RoPE 的优势：点积仅与相对位置 $m-n$ 有关，天然支持相对位置编码；计算高效，不改变向量模长。
+
+### 32.3.2 实现
+
+```python
+def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
+    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
+    t = torch.arange(end, device=freqs.device)
+    freqs = torch.outer(t, freqs).float()
+    freqs_cos = torch.cos(freqs)
+    freqs_sin = torch.sin(freqs)
+    return freqs_cos, freqs_sin
+
+
+def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
+    ndim = x.ndim
+    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
+    return freqs_cis.view(shape)
+
+
+def apply_rotary_emb(xq, xk, freqs_cos, freqs_sin):
+    xq_r, xq_i = xq.float().reshape(xq.shape[:-1] + (-1, 2)).unbind(-1)
+    xk_r, xk_i = xk.float().reshape(xk.shape[:-1] + (-1, 2)).unbind(-1)
+
+    freqs_cos = reshape_for_broadcast(freqs_cos, xq_r)
+    freqs_sin = reshape_for_broadcast(freqs_sin, xq_r)
+
+    xq_out_r = xq_r * freqs_cos - xq_i * freqs_sin
+    xq_out_i = xq_r * freqs_sin + xq_i * freqs_cos
+    xk_out_r = xk_r * freqs_cos - xk_i * freqs_sin
+    xk_out_i = xk_r * freqs_sin + xk_i * freqs_cos
+
+    xq_out = torch.stack([xq_out_r, xq_out_i], dim=-1).flatten(3)
+    xk_out = torch.stack([xk_out_r, xk_out_i], dim=-1).flatten(3)
+    return xq_out.type_as(xq), xk_out.type_as(xk)
+```
+
+测试：
+
+```python
+xq = torch.randn(1, 50, 6, 48)
+xk = torch.randn(1, 50, 6, 48)
+cos, sin = precompute_freqs_cis(288 // 6, 50)
+xq_out, xk_out = apply_rotary_emb(xq, xk, cos, sin)
+print(xq_out.shape, xk_out.shape)
+# torch.Size([1, 50, 6, 48]) torch.Size([1, 50, 6, 48])
+```
+
+---
+
+## 32.4 GQA 分组查询注意力
+
+### 32.4.1 MHA 到 MQA 到 GQA 的演进
+
+标准的**多头注意力（MHA）** 为每个 Query 头配备独立的 Key 和 Value 头。随着模型规模增大，KV 缓存成为推理瓶颈。这一演进经历了三个阶段：
+
+- **MHA（Multi-Head Attention）**：每个 Q 头有独立的 K/V 头。`n_kv_heads == n_heads`。
+- **MQA（Multi-Query Attention）**：所有 Q 头共享唯一的一组 K/V 头。`n_kv_heads == 1`。
+- **GQA（Grouped-Query Attention）**：每组 Q 头共享一组 K/V 头，是 MHA 和 MQA 的折中。`1 \< n_kv_heads \< n_heads`。
+
+GQA 在保持 MHA 大部分性能的同时，将 KV 缓存大小降低为原来的 `n_kv_heads / n_heads`。例如 LLaMA2-70B 使用 `n_heads=64, n_kv_heads=8`，KV 缓存减少了 8 倍。
+
+### 32.4.2 repeat\_kv 辅助函数
+
+在计算注意力前，需要将 K/V 的头"复制"到与 Q 头对齐：
+
+```python
+def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
+    bs, slen, n_kv_heads, head_dim = x.shape
+    if n_rep == 1:
+        return x
+    return (
+        x[:, :, :, None, :]
+        .expand(bs, slen, n_kv_heads, n_rep, head_dim)
+        .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
+    )
+```
+
+---
+
+## 32.5 SwiGLU 激活函数
+
+### 32.5.1 公式
+
+标准 Transformer 的 FFN 使用两个线性层和一个激活函数（如 ReLU）。SwiGLU 引入**门控机制**，使用三个线性变换：
+
+$$\text{SwiGLU}(x, W_1, W_3, W_2) = (\text{swish}(xW_1) \otimes xW_3)W_2$$
+
+其中 $\otimes$ 是逐元素乘法，$\text{swish}(x) = x \cdot \sigma(x)$（在 PyTorch 中即 `F.silu`）。
+
+直觉理解：$xW_1$ 经过 Swish 激活后得到"候选值"，$xW_3$ 作为"门"控制哪些信息通过。两者逐元素相乘后，再通过 $W_2$ 投影回原始维度。这种门控结构让网络能动态控制信息流。
+
+### 32.5.2 实现
+
+```python
+import torch.nn.functional as F
+
+
+class SwiGLUFFN(nn.Module):
+    def __init__(self, dim: int, hidden_dim: int, multiple_of: int, dropout: float):
+        super().__init__()
+        if hidden_dim is None:
+            hidden_dim = 4 * dim
+            hidden_dim = int(2 * hidden_dim / 3)
+            hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
+        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
+```
+
+---
+
+## 32.6 LLaMA2 Attention 模块完整实现
+
+![LLaMA2 Attention 结构](/images/ch32_llama2-attention.png)
+
+
+将 RoPE 和 GQA 组合起来，构成完整的注意力模块：
+
+```python
+import math
+
+
+class Attention(nn.Module):
+    def __init__(self, args):
+        super().__init__()
+        self.n_kv_heads = args.n_heads if args.n_kv_heads is None else args.n_kv_heads
+        assert args.n_heads % self.n_kv_heads == 0
+
+        model_parallel_size = 1
+        self.n_local_heads = args.n_heads // model_parallel_size
+        self.n_local_kv_heads = self.n_kv_heads // model_parallel_size
+        self.n_rep = self.n_local_heads // self.n_local_kv_heads
+        self.head_dim = args.dim // args.n_heads
+
+        self.wq = nn.Linear(args.dim, args.n_heads * self.head_dim, bias=False)
+        self.wk = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.wv = nn.Linear(args.dim, self.n_kv_heads * self.head_dim, bias=False)
+        self.wo = nn.Linear(args.n_heads * self.head_dim, args.dim, bias=False)
+
+        self.attn_dropout = nn.Dropout(args.dropout)
+        self.resid_dropout = nn.Dropout(args.dropout)
+        self.dropout = args.dropout
+
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        if not self.flash:
+            mask = torch.full(
+                (1, 1, args.max_seq_len, args.max_seq_len), float("-inf")
+            )
+            mask = torch.triu(mask, diagonal=1)
+            self.register_buffer("mask", mask)
+
+    def forward(self, x, freqs_cos, freqs_sin):
+        bsz, seqlen, _ = x.shape
+
+        xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        xq = xq.view(bsz, seqlen, self.n_local_heads, self.head_dim)
+        xk = xk.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
+        xv = xv.view(bsz, seqlen, self.n_local_kv_heads, self.head_dim)
+
+        xq, xk = apply_rotary_emb(xq, xk, freqs_cos, freqs_sin)
+
+        xk = repeat_kv(xk, self.n_rep)
+        xv = repeat_kv(xv, self.n_rep)
+
+        xq = xq.transpose(1, 2)
+        xk = xk.transpose(1, 2)
+        xv = xv.transpose(1, 2)
+
+        if self.flash:
+            output = torch.nn.functional.scaled_dot_product_attention(
+                xq, xk, xv,
+                attn_mask=None,
+                dropout_p=self.dropout if self.training else 0.0,
+                is_causal=True,
+            )
+        else:
+            scores = torch.matmul(xq, xk.transpose(2, 3)) / math.sqrt(self.head_dim)
+            scores = scores + self.mask[:, :, :seqlen, :seqlen]
+            scores = F.softmax(scores.float(), dim=-1).type_as(xq)
+            scores = self.attn_dropout(scores)
+            output = torch.matmul(scores, xv)
+
+        output = output.transpose(1, 2).contiguous().view(bsz, seqlen, -1)
+        output = self.wo(output)
+        output = self.resid_dropout(output)
+        return output
+```
+
+前向传播的数据流：
+
+1. 输入 `[bsz, seqlen, dim]` 经过 `wq/wk/wv` 线性投影
+2. `view` 将最后一维拆分为 `[n_heads, head_dim]`
+3. 应用 RoPE 旋转位置编码
+4. `repeat_kv` 将 KV 头复制到与 Q 头对齐
+5. `transpose` 将头维度提前，执行注意力计算
+6. 合并头维度，经过 `wo` 输出投影
+
+---
+
+## 32.7 LLaMA2 MLP 模块完整实现
+
+MLP 模块使用 SwiGLU 激活函数，相对简洁：
+
+```python
+class MLP(nn.Module):
+    def __init__(self, dim: int, hidden_dim: int, multiple_of: int, dropout: float):
+        super().__init__()
+        if hidden_dim is None:
+            hidden_dim = 4 * dim
+            hidden_dim = int(2 * hidden_dim / 3)
+            hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
+        self.w1 = nn.Linear(dim, hidden_dim, bias=False)
+        self.w2 = nn.Linear(hidden_dim, dim, bias=False)
+        self.w3 = nn.Linear(dim, hidden_dim, bias=False)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x):
+        return self.dropout(self.w2(F.silu(self.w1(x)) * self.w3(x)))
+```
+
+---
+
+## 32.8 LLaMA2 Decoder Layer 完整实现
+
+Decoder Layer 将 Attention 和 MLP 组合在一起，采用**预归一化**结构：
+
+```python
+class DecoderLayer(nn.Module):
+    def __init__(self, layer_id: int, args):
+        super().__init__()
+        self.n_heads = args.n_heads
+        self.dim = args.dim
+        self.head_dim = args.dim // args.n_heads
+        self.attention = Attention(args)
+        self.feed_forward = MLP(
+            dim=args.dim,
+            hidden_dim=args.hidden_dim,
+            multiple_of=args.multiple_of,
+            dropout=args.dropout,
+        )
+        self.layer_id = layer_id
+        self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
+
+    def forward(self, x, freqs_cos, freqs_sin):
+        # 预归一化 + 残差连接
+        h = x + self.attention.forward(self.attention_norm(x), freqs_cos, freqs_sin)
+        out = h + self.feed_forward.forward(self.ffn_norm(h))
+        return out
+```
+
+注意 Pre-Norm 的顺序：先 RMSNorm，再送入子层，最后残差连接。这与原始 Transformer 的 Post-Norm（先子层，再归一化）不同。
+
+---
+
+## 32.9 LLaMA2 完整模型组装
+
+将所有组件组装成完整的 LLaMA2 模型：
+
+```python
+from transformers import PretrainedConfig, PreTrainedModel
+from transformers.modeling_outputs import CausalLMOutputWithPast
+from typing import Optional
+
+
+class ModelConfig(PretrainedConfig):
+    model_type = "Tiny-K"
+
+    def __init__(
+        self,
+        dim: int = 768,
+        n_layers: int = 12,
+        n_heads: int = 16,
+        n_kv_heads: int = 8,
+        vocab_size: int = 6144,
+        hidden_dim: int = None,
+        multiple_of: int = 64,
+        norm_eps: float = 1e-5,
+        max_seq_len: int = 512,
+        dropout: float = 0.0,
+        flash_attn: bool = True,
+        **kwargs,
+    ):
+        self.dim = dim
+        self.n_layers = n_layers
+        self.n_heads = n_heads
+        self.n_kv_heads = n_kv_heads
+        self.vocab_size = vocab_size
+        self.hidden_dim = hidden_dim
+        self.multiple_of = multiple_of
+        self.norm_eps = norm_eps
+        self.max_seq_len = max_seq_len
+        self.dropout = dropout
+        self.flash_attn = flash_attn
+        super().__init__(**kwargs)
+
+
+class LLaMA2Model(PreTrainedModel):
+    config_class = ModelConfig
+    last_loss: Optional[torch.Tensor]
+
+    def __init__(self, args: ModelConfig = None):
+        super().__init__(args)
+        self.args = args
+        self.vocab_size = args.vocab_size
+        self.n_layers = args.n_layers
+
+        # 词嵌入层
+        self.tok_embeddings = nn.Embedding(args.vocab_size, args.dim)
+        self.dropout = nn.Dropout(args.dropout)
+
+        # Decoder 层堆叠
+        self.layers = torch.nn.ModuleList()
+        for layer_id in range(args.n_layers):
+            self.layers.append(DecoderLayer(layer_id, args))
+
+        # 最终归一化和输出
+        self.norm = RMSNorm(args.dim, eps=args.norm_eps)
+        self.output = nn.Linear(args.dim, args.vocab_size, bias=False)
+
+        # 权重共享：词嵌入和输出层共享权重
+        self.tok_embeddings.weight = self.output.weight
+
+        # 预计算 RoPE 频率
+        freqs_cos, freqs_sin = precompute_freqs_cis(
+            self.args.dim // self.args.n_heads, self.args.max_seq_len
+        )
+        self.register_buffer("freqs_cos", freqs_cos, persistent=False)
+        self.register_buffer("freqs_sin", freqs_sin, persistent=False)
+
+        # 权重初始化
+        self.apply(self._init_weights)
+        for pn, p in self.named_parameters():
+            if pn.endswith('w3.weight') or pn.endswith('wo.weight'):
+                torch.nn.init.normal_(p, mean=0.0, std=0.02 / math.sqrt(2 * args.n_layers))
+
+        self.last_loss = None
+        self.OUT = CausalLMOutputWithPast()
+        self._no_split_modules = [name for name, _ in self.named_modules()]
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(self, tokens, targets=None, **kwargs):
+        if 'input_ids' in kwargs:
+            tokens = kwargs['input_ids']
+        if 'labels' in kwargs:
+            targets = kwargs['labels']
+
+        _bsz, seqlen = tokens.shape
+        h = self.tok_embeddings(tokens)
+        h = self.dropout(h)
+
+        freqs_cos = self.freqs_cos[:seqlen]
+        freqs_sin = self.freqs_sin[:seqlen]
+
+        for layer in self.layers:
+            h = layer(h, freqs_cos, freqs_sin)
+        h = self.norm(h)
+
+        if targets is not None:
+            logits = self.output(h)
+            self.last_loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)), targets.view(-1),
+                ignore_index=0, reduction='none'
+            )
+        else:
+            logits = self.output(h[:, [-1], :])
+            self.last_loss = None
+
+        self.OUT.__setitem__('logits', logits)
+        self.OUT.__setitem__('last_loss', self.last_loss)
+        return self.OUT
+
+    @torch.inference_mode()
+    def generate(self, idx, stop_id=None, max_new_tokens=256,
+                 temperature=1.0, top_k=None):
+        index = idx.shape[1]
+        for _ in range(max_new_tokens):
+            idx_cond = (
+                idx if idx.size(1) <= self.args.max_seq_len
+                else idx[:, -self.args.max_seq_len:]
+            )
+            logits = self(idx_cond).logits
+            logits = logits[:, -1, :]
+
+            if temperature == 0.0:
+                _, idx_next = torch.topk(logits, k=1, dim=-1)
+            else:
+                logits = logits / temperature
+                if top_k is not None:
+                    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                    logits[logits < v[:, [-1]]] = -float('Inf')
+                probs = F.softmax(logits, dim=-1)
+                idx_next = torch.multinomial(probs, num_samples=1)
+
+            if idx_next == stop_id:
+                break
+            idx = torch.cat((idx, idx_next), dim=1)
+        return idx[:, index:]
+```
+
+### 32.9.1 完整测试
+
+```python
+args = ModelConfig(dim=768, n_layers=12, n_heads=16, n_kv_heads=8)
+model = LLaMA2Model(args=args)
+
+num_params = sum(p.numel() for p in model.parameters())
+print("参数量: {:.1f}M".format(num_params / 1e6))
+
+x = torch.randint(0, 6144, (1, 50))
+out = model(x)
+print(out.logits.shape)
+# 参数量: 82.6M
+# torch.Size([1, 1, 6144])
+```
+
+---
+
+## 32.10 MoE 混合专家架构
+
+### 32.10.1 从稠密到稀疏
+
+前面实现的 LLaMA2 是**稠密模型**：每个 Token 的计算都经过所有参数。而 **MoE（Mixture of Experts）** 通过"稀疏激活"机制，在增加参数量的同时保持推理计算量不变。
+
+MoE 的核心思想：
+
+- **专家网络**：多个独立的前馈网络，每个专家专注于输入空间的某个子区域
+- **门控网络**：根据输入动态选择 Top-k 个专家进行计算
+- **加权聚合**：将选中专家的输出按权重求和
+
+### 32.10.2 路由机制
+
+对于输入 Token $\mathbf{x}$，MoE 层的输出为：
+
+$$\mathbf{y} = \sum_{i=1}^{N} p_i(\mathbf{x}) \cdot \mathbf{E}_i(\mathbf{x})$$
+
+其中 $p_i(\mathbf{x})$ 是门控网络计算的 Top-k 概率，$\mathbf{E}_i$ 是第 $i$ 个专家。只有被选中的 $k$ 个专家参与计算，其余为零。
+
+### 32.10.3 负载均衡
+
+稀疏选择容易导致"马太效应"——某些专家被频繁选中而越来越强，其他专家被"饿死"。解决方案是在损失函数中加入**辅助损失**，鼓励 Token 均匀分布：
+
+$$\text{Loss}_{aux} = \alpha \cdot N \cdot \sum_{i=1}^{N} f_i \cdot P_i$$
+
+其中 $f_i$ 是实际分发给专家 $i$ 的 Token 比例，$P_i$ 是门控网络预期的概率总和。
+
+### 32.10.4 DeepSeek 的创新：共享专家
+
+DeepSeekMoE 引入了**共享专家隔离**机制：指定部分专家为"共享专家"，对所有 Token 总是被激活，负责通用知识；路由专家则专注于特定领域：
+
+$$\mathbf{y} = \underbrace{\sum_{i \in \mathcal{S}} \mathbf{E}_i(\mathbf{x})}_{\text{共享专家}} + \underbrace{\sum_{j \in \text{TopK}(\mathcal{R})} p_j(\mathbf{x}) \cdot \mathbf{E}_j(\mathbf{x})}_{\text{路由专家}}$$
+
+### 32.10.5 MoE 代码实现
+
+```python
+class MoELayer(nn.Module):
+    def __init__(self, dim, hidden_dim, multiple_of, dropout,
+                 num_experts=8, top_k=2):
+        super().__init__()
+        self.num_experts = num_experts
+        self.top_k = top_k
+        self.gate = nn.Linear(dim, num_experts, bias=False)
+        self.experts = nn.ModuleList([
+            MLP(dim, hidden_dim, multiple_of, dropout)
+            for _ in range(num_experts)
+        ])
+
+    def forward(self, x):
+        B, T, D = x.shape
+        x_flat = x.view(-1, D)
+
+        gate_logits = self.gate(x_flat)
+        weights, indices = torch.topk(gate_logits, self.top_k, dim=-1)
+        weights = F.softmax(weights, dim=-1)
+
+        output = torch.zeros_like(x_flat)
+        for i, expert in enumerate(self.experts):
+            batch_idx, k_idx = torch.where(indices == i)
+            if len(batch_idx) == 0:
+                continue
+            expert_input = x_flat[batch_idx]
+            expert_out = expert(expert_input)
+            expert_weights = weights[batch_idx, k_idx].unsqueeze(-1)
+            output.index_add_(0, batch_idx, expert_out * expert_weights)
+
+        return output.view(B, T, D)
+```
+
+要将 LLaMA2 改为 MoE 模型，只需将 DecoderLayer 中的 `MLP` 替换为 `MoELayer` 即可，其他组件完全不变。这体现了 MoE 作为"可插拔层"的优雅设计。
+
+---
+
+## 32.11 文本生成策略
+
+模型训练完成后，如何从概率分布中生成文本？这是**解码策略**要解决的问题。
+
+### 32.11.1 Greedy Decoding
+
+最简单的策略：每一步选择概率最高的 Token。
+
+$$\text{next\_token} = \arg\max P(w_t | w_{\<t})$$
+
+优点是速度快、结果确定；缺点是容易陷入重复和局部最优。
+
+```python
+def greedy_decode(logits):
+    return torch.argmax(logits, dim=-1)
+```
+
+### 32.11.2 Beam Search
+
+同时维护 $k$ 条候选序列（beam），每步扩展后保留得分最高的 $k$ 条：
+
+```python
+def beam_search_step(beam_scores, logits, num_beams):
+    vocab_size = logits.size(-1)
+    next_scores = beam_scores.unsqueeze(-1) + logits
+    next_scores = next_scores.view(-1, num_beams * vocab_size)
+    next_scores, next_tokens = torch.topk(next_scores, num_beams, dim=-1)
+    next_beam_indices = next_tokens // vocab_size
+    next_tokens = next_tokens % vocab_size
+    return next_scores, next_tokens, next_beam_indices
+```
+
+Beam Search 在翻译/摘要等任务中表现稳定，但在开放式生成中容易产生重复和模板化输出。
+
+### 32.11.3 Temperature（温度参数）
+
+温度参数 $T$ 控制概率分布的"尖锐程度"：
+
+$$P(w_i) = \frac{\exp(z_i / T)}{\sum_j \exp(z_j / T)}$$
+
+- $T = 1$：原始分布
+- $T \< 1$：分布更尖，更"确定"，偏向高概率 Token
+- $T \> 1$：分布更平，更"随机"，低概率 Token 也有机会
+
+直觉示例：假设 logits 为 $[2, 1, 0]$：
+
+- $T=1$：概率约为 $[0.665, 0.245, 0.090]$
+- $T=0.5$：概率约为 $[0.867, 0.117, 0.016]$（更尖）
+- $T=2$：概率约为 $[0.506, 0.307, 0.186]$（更平）
+
+```python
+def apply_temperature(logits, temperature):
+    return logits / temperature
+```
+
+### 32.11.4 Top-k Sampling
+
+只保留概率最高的 $k$ 个 Token，其余概率置为 $-\infty$：
+
+```python
+def top_k_filtering(logits, top_k):
+    v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+    logits[logits < v[:, [-1]]] = -float('Inf')
+    return logits
+```
+
+### 32.11.5 Top-p (Nucleus) Sampling
+
+按概率从高到低排序，只保留累计概率达到 $p$ 的最小 Token 集合：
+
+```python
+def top_p_filtering(logits, top_p):
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+    sorted_indices_to_remove = cumulative_probs > top_p
+    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+    sorted_indices_to_remove[..., 0] = 0
+    indices_to_remove = sorted_indices_to_remove.scatter(
+        1, sorted_indices, sorted_indices_to_remove
+    )
+    logits[indices_to_remove] = -float('Inf')
+    return logits
+```
+
+Top-k 的候选数量固定，Top-p 的候选数量动态——当分布尖锐时保留很少的 Token，分布平坦时保留更多。
+
+### 32.11.6 组合使用
+
+实际应用中，Temperature 和 Top-p 通常配合使用：
+
+1. **Temperature** 控制分布的形状（随机性强弱）
+2. **Top-p** 裁掉低概率尾巴（从哪些 Token 里抽）
+3. 从处理后的分布中**随机采样**
+
+```python
+@torch.inference_mode()
+def generate_with_strategies(model, idx, max_new_tokens=256,
+                              temperature=0.7, top_k=None, top_p=None):
+    index = idx.shape[1]
+    for _ in range(max_new_tokens):
+        idx_cond = (
+            idx if idx.size(1) <= model.args.max_seq_len
+            else idx[:, -model.args.max_seq_len:]
+        )
+        logits = model(idx_cond).logits[:, -1, :]
+
+        if temperature == 0.0:
+            _, idx_next = torch.topk(logits, k=1, dim=-1)
+        else:
+            logits = logits / temperature
+            if top_k is not None:
+                logits = top_k_filtering(logits, top_k)
+            if top_p is not None:
+                logits = top_p_filtering(logits, top_p)
+            probs = F.softmax(logits, dim=-1)
+            idx_next = torch.multinomial(probs, num_samples=1)
+
+        idx = torch.cat((idx, idx_next), dim=1)
+    return idx[:, index:]
+```
+
+---
+
+## 32.12 In-Context Learning 与 Prompt Engineering
+
+### 32.12.1 上下文学习
+
+**上下文学习（In-Context Learning, ICL）** 是 LLM 最令人惊讶的能力之一：不需要更新任何权重，仅通过在 Prompt 中提供几个示例，模型就能学会新任务。
+
+三种模式：
+
+- **Zero-shot**：只给任务指令，不给示例
+- **One-shot**：给一个示例
+- **Few-shot**：给多个示例
+
+```text
+# Zero-shot
+将以下句子翻译成英文：今天天气很好。
+
+# One-shot
+中文：你好吗？ -> 英文：How are you?
+中文：今天天气很好。 -> 英文：
+
+# Few-shot
+中文：你好吗？ -> 英文：How are you?
+中文：谢谢。 -> 英文：Thank you.
+中文：今天天气很好。 -> 英文：
+```
+
+ICL 为什么有效？几种主流解释：
+
+1. **感应头机制**：Transformer 中的特殊注意力头能"匹配并复制"上下文中的模式
+2. **隐式权重更新**：前向传播中的自注意力和 MLP 组合，近似产生了一种瞬时的"权重适配"效应
+3. **贝叶斯推断**：模型在上下文中对潜在任务做近似推断
+
+### 32.12.2 思维链（Chain-of-Thought）
+
+**思维链**技术鼓励模型在给出答案前先输出推理步骤：
+
+```text
+# 普通提问
+Q: 一个农场有 15 只鸡和 8 只鸭，卖掉了 7 只鸡。还剩多少只鸡？
+A: 8
+
+# CoT 提问
+Q: 一个农场有 15 只鸡和 8 只鸭，卖掉了 7 只鸡。还剩多少只鸡？让我们一步一步地思考
+A: 农场原有 15 只鸡。卖掉了 7 只鸡。15 - 7 = 8。答案是 8。
+```
+
+CoT 的核心价值：将复杂问题拆解为多个简单步骤，每步生成的中间结果成为下一步的"草稿纸"，引导模型走向正确答案。
+
+---
+
+## 32.13 常见误区
+
+在搭建和训练 LLM 时，有几个容易犯的错误：
+
+**误区 1：RMSNorm 和 LayerNorm 可以随意互换**
+
+虽然两者都是归一化，但 RMSNorm 去掉了均值中心化，在深层网络中训练动态不同。LLaMA2 的设计是配套的，随意替换可能影响训练稳定性。
+
+**误区 2：GQA 只是"省显存的 MHA"**
+
+GQA 不仅省显存，还改变了模型的学习动态。KV 头共享意味着不同 Q 头"看到"的 K/V 表示更相似，这是一种隐式的正则化。在小模型上 GQA 可能损失一些表达能力。
+
+**误区 3：Temperature 设得越低越好**
+
+Temperature=0 生成最确定的文本，但也最容易陷入重复。实际应用中 0.6-0.9 通常是较好的范围。
+
+**误区 4：Beam Search 总是比 Greedy 好**
+
+Beam Search 在翻译等封闭任务上有优势，但在开放式对话中往往更保守、更模板化。大模型时代的聊天生成通常使用 Sampling + Top-p。
+
+**误区 5：MoE 的专家会按"知识领域"分工**
+
+研究表明，MoE 的专家更多地按语法和 Token 结构分工，而非人类定义的知识领域（如数学、生物）。
+
+**误区 6：位置编码加在输入端就行**
+
+RoPE 的位置信息是在注意力计算时注入 Q/K 向量的，不是加在词嵌入上。这是与传统绝对位置编码的根本区别。
+
+---
+
+## 32.14 小结
+
+本章从零搭建了一个完整的 LLaMA2 模型，涵盖了现代大语言模型的核心技术栈：
+
+- **RMSNorm**：简化版归一化，去掉均值中心化
+- **RoPE**：旋转位置编码，通过复数乘法注入相对位置信息
+- **GQA**：分组查询注意力，平衡性能与效率
+- **SwiGLU**：门控前馈网络，增强非线性表达
+- **MoE**：混合专家架构，通过稀疏激活扩大模型容量
+- **生成策略**：Greedy / Beam Search / Top-k / Top-p / Temperature
+- **上下文学习**：Zero-shot / Few-shot / Chain-of-Thought
+
+这些组件共同构成了现代 LLM 的技术基石。从 LLaMA2 到 Mixtral 再到 DeepSeek-R1，架构的演进本质上是在**效率**（更少的计算）和**能力**（更好的表达）之间寻找最优平衡点。
+
+---
+
+## 进一步阅读
+
+- Touvron et al. (2023). *Llama 2: Open Foundation and Fine-Tuned Chat Models*. [arXiv:2307.09288](https://arxiv.org/abs/2307.09288)
+- Zhang & Sennrich (2019). *Root Mean Square Layer Normalization*. NeurIPS 2019. [arXiv:1910.07467](https://arxiv.org/abs/1910.07467)
+- Su et al. (2021). *RoFormer: Enhanced Transformer with Rotary Position Embedding*. [arXiv:2104.09864](https://arxiv.org/abs/2104.09864)
+- Ainslie et al. (2023). *GQA: Training Generalized Multi-Query Attention Models*. [arXiv:2305.13245](https://arxiv.org/abs/2305.13245)
+- Shazeer (2020). *GLU Variants Improve Transformer*. [arXiv:2002.05202](https://arxiv.org/abs/2002.05202)
+- Jiang et al. (2024). *Mixtral of Experts*. [arXiv:2401.04088](https://arxiv.org/abs/2401.04088)
+- DeepSeek-AI (2025). *DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via RL*. [arXiv:2501.12948](https://arxiv.org/abs/2501.12948)
+- Fedus et al. (2021). *Switch Transformers: Scaling to Trillion Parameter Models*. [arXiv:2101.03961](https://arxiv.org/abs/2101.03961)
+- Wei et al. (2022). *Chain-of-Thought Prompting Elicits Reasoning in LLMs*. [arXiv:2201.11903](https://arxiv.org/abs/2201.11903)
+- Karpathy (2023). *llama2.c: Fullstack Llama 2 in pure C*. [GitHub](https://github.com/karpathy/llama2.c)

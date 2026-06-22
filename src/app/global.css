@@ -1,6 +1,49 @@
 @import 'tailwindcss';
-@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/lib/default-colors.css';
 @import 'fumadocs-ui/css/preset.css';
+
+@theme {
+  --color-fd-background: hsl(180, 30%, 97%);
+  --color-fd-foreground: hsl(175, 40%, 15%);
+  --color-fd-muted: hsl(175, 30%, 94%);
+  --color-fd-muted-foreground: hsl(175, 15%, 45%);
+  --color-fd-popover: hsl(180, 30%, 98%);
+  --color-fd-popover-foreground: hsl(175, 40%, 15%);
+  --color-fd-card: hsl(180, 35%, 96%);
+  --color-fd-card-foreground: hsl(175, 40%, 15%);
+  --color-fd-border: hsla(175, 40%, 75%, 0.5);
+  --color-fd-primary: hsl(175, 70%, 35%);
+  --color-fd-primary-foreground: hsl(180, 100%, 98%);
+  --color-fd-secondary: hsl(175, 35%, 92%);
+  --color-fd-secondary-foreground: hsl(175, 50%, 20%);
+  --color-fd-accent: hsl(180, 45%, 90%);
+  --color-fd-accent-foreground: hsl(175, 60%, 20%);
+  --color-fd-ring: hsl(175, 70%, 45%);
+}
+
+.dark {
+  --color-fd-background: hsl(200, 35%, 7%);
+  --color-fd-foreground: hsl(175, 30%, 90%);
+  --color-fd-muted: hsl(200, 30%, 12%);
+  --color-fd-muted-foreground: hsl(175, 20%, 60%);
+  --color-fd-popover: hsl(200, 35%, 10%);
+  --color-fd-popover-foreground: hsl(175, 30%, 90%);
+  --color-fd-card: hsl(200, 35%, 10%);
+  --color-fd-card-foreground: hsl(175, 30%, 90%);
+  --color-fd-border: hsla(175, 30%, 40%, 0.25);
+  --color-fd-primary: hsl(175, 60%, 55%);
+  --color-fd-primary-foreground: hsl(200, 40%, 8%);
+  --color-fd-secondary: hsl(200, 30%, 16%);
+  --color-fd-secondary-foreground: hsl(175, 40%, 85%);
+  --color-fd-accent: hsl(200, 30%, 18%);
+  --color-fd-accent-foreground: hsl(175, 50%, 75%);
+  --color-fd-ring: hsl(175, 60%, 55%);
+}
+
+.dark body {
+  background-image: linear-gradient(rgba(13, 148, 136, 0.12), transparent 20rem, transparent);
+  background-repeat: no-repeat;
+}
 
 html {
   scrollbar-gutter: stable;
@@ -9,4 +52,108 @@ html {
 html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
+}
+
+@keyframes hero-float {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-12px) rotate(2deg); }
+}
+
+@keyframes hero-float-reverse {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(12px) rotate(-2deg); }
+}
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.6s ease-out both;
+}
+
+.animate-fade-in-up-delay-1 {
+  animation: fade-in-up 0.6s ease-out 0.15s both;
+}
+
+.animate-fade-in-up-delay-2 {
+  animation: fade-in-up 0.6s ease-out 0.3s both;
+}
+
+.hero-gradient {
+  background: linear-gradient(135deg, #0d9488 0%, #06b6d4 50%, #0ea5e9 100%);
+}
+
+.dark .hero-gradient {
+  background: linear-gradient(135deg, #0f766e 0%, #0e7490 50%, #0369a1 100%);
+}
+
+.hero-glow {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(80px);
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+.dark .hero-glow {
+  opacity: 0.2;
+}
+
+.card-glass {
+  background: hsla(0, 0%, 100%, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid hsla(175, 40%, 75%, 0.3);
+}
+
+.dark .card-glass {
+  background: hsla(200, 35%, 12%, 0.6);
+  border-color: hsla(175, 30%, 40%, 0.2);
+}
+
+.feature-card {
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.feature-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px -8px hsla(175, 60%, 40%, 0.2);
+}
+
+.dark .feature-card:hover {
+  box-shadow: 0 12px 32px -8px hsla(175, 60%, 40%, 0.15);
+}
+
+/* ============================================
+   KaTeX 数学公式样式优化
+   - 块级公式居中显示并放大 1.2 倍
+   - 行内公式保持原始尺寸
+   - 深色/浅色模式自适应
+   - 短公式智能行内显示
+   ============================================ */
+
+/* 块级公式（$$...$$）：智能显示 */
+.katex-display,
+code.language-math:has(> .katex) {
+  font-size: 1.2em;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25em 0;
+  /* 关键：inline-block 让短公式保持行内，长公式自动换行 */
+  display: inline-block;
+  max-width: 100%;
+  /* 让父容器居中 */
+  vertical-align: middle;
+}
+
+/* KaTeX 错误信息样式优化 */
+.katex-error {
+  color: var(--color-fd-destructive, #dc2626);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.95em;
+}
+
+.dark .katex-error {
+  color: #fca5a5;
 }

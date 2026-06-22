@@ -1,0 +1,423 @@
+---
+title: 27 RNN 与 Seq2Seq
+description: 序列建模回顾、编码器-解码器、信息瓶颈
+---
+
+# 27 RNN 与 Seq2Seq
+
+上一章我们学习了分词与词向量，解决了"如何将文本变成数字"的问题。但文本不是一个词一个词孤立存在的——"我爱你"和"你爱我"使用完全相同的词向量，语义却截然不同。**如何从词向量序列中提取整句的语义？**这是序列建模的核心挑战。
+
+本章将从 NLP/LLM 的视角回顾 RNN，重点介绍 **Seq2Seq（序列到序列）** 架构——它是机器翻译、文本摘要等"输入一段序列、输出另一段序列"任务的里程碑方案。更重要的是，我们将剖析 Seq2Seq 的**信息瓶颈**问题——正是这个缺陷，催生了下一章的注意力机制，最终引出了 Transformer。
+
+> 本章不会重复 RNN/LSTM 的基础数学推导（请参阅第 15 章），而是聚焦于 Seq2Seq 架构本身及其在 NLP 中的角色。
+
+## 1 序列数据的挑战
+
+自然语言是典型的**序列数据**——词与词之间存在顺序关系，且输入和输出的长度往往不同。这给模型带来了两个核心挑战：
+
+### 1.1 变长输入与输出
+
+考虑机器翻译任务：
+
+```text
+输入：我 爱 人工智能    （3 个 token）
+输出：I love artificial intelligence  （4 个 token）
+```
+
+输入和输出的长度不相等，且没有固定的一一对应关系。这意味着模型不能"边读边写"，而必须**先完整理解输入，再逐步生成输出**。
+
+### 1.2 长距离依赖
+
+在长句子中，关键信息可能相隔很远：
+
+```text
+"孙悟空初到天庭时被封为弼马温……五百年后，当有神仙旧事重提，用这个官职来称呼他时，
+依然是在嘲讽他。"
+```
+
+要理解"嘲讽"的含义，模型必须关联到句子开头的"弼马温"是一个低微官职。这种跨越数百个词的依赖关系，对模型的"记忆"能力提出了极高的要求。
+
+## 2 RNN 快速回顾
+
+> 关于 RNN、LSTM、GRU 的基础结构和数学推导，请参阅第 15 章。本节仅从 NLP 应用视角做简要回顾。
+
+### 2.1 RNN 的核心思想
+
+循环神经网络（Recurrent Neural Network, RNN）的核心思想是引入**隐藏状态 $h_t$** 作为"记忆"，在处理序列的每一步融合当前输入和历史信息：
+
+$$h_t = \tanh(U x_t + W h_{t-1})$$
+
+其中 $U$ 和 $W$ 是所有时间步共享的权重矩阵。最终的隐藏状态 $h_T$ 可以看作整个序列的"语义摘要"。
+
+### 2.2 LSTM 与门控机制
+
+标准 RNN 存在**梯度消失**问题——当序列很长时，梯度在反向传播中会指数级衰减，导致模型无法学习远距离依赖。LSTM 通过引入**细胞状态 $c_t$** 和三个门（遗忘门、输入门、输出门）来缓解这个问题。关键在于，细胞状态的梯度传播路径是：
+
+$$\frac{\partial L}{\partial c_k} = \frac{\partial L}{\partial c_t} \odot (f_t \odot f_{t-1} \odot \dots \odot f_{k+1})$$
+
+梯度只经过逐元素乘法，没有权重矩阵的连乘，因此可以更好地保持。
+
+### 2.3 RNN 在 NLP 中的典型应用
+
+在 Seq2Seq 出现之前，RNN 已经在多种 NLP 任务中大放异彩：
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│  任务类型          输入→输出          RNN 处理方式        │
+├─────────────────────────────────────────────────────────┤
+│  文本分类          序列→类别          取最后隐藏状态 h_T   │
+│  词性标注          序列→等长序列      每步输出一个标签      │
+│  语言模型          序列→下一词概率    每步预测下一个词      │
+│  机器翻译          序列→不同长度序列  ???                  │
+└─────────────────────────────────────────────────────────┘
+```
+
+前三种任务都有成熟的 RNN 解决方案，但**机器翻译**这种"输入和输出长度不等"的任务，单靠 RNN 无法直接处理。这就引出了 Seq2Seq 架构。
+
+## 3 Seq2Seq 架构
+
+### 3.1 从自编码器到 Seq2Seq
+
+Seq2Seq 的设计灵感来自**自编码器（Autoencoder）**。自编码器由编码器和解码器组成，目标是将输入压缩成低维表示再重构回原始输入。Seq2Seq 对此进行了关键泛化：**解码器不再重构输入，而是生成一个全新的、语义相关的目标序列**。
+
+```text
+自编码器：  输入 → [编码器] → 压缩表示 → [解码器] → 重构输入
+Seq2Seq：  源序列 → [编码器] → 上下文向量 → [解码器] → 目标序列
+```
+
+### 3.2 整体架构
+
+Seq2Seq 由两个核心组件构成：
+
+**编码器（Encoder）**：读取整个输入序列，将信息压缩成一个固定长度的**上下文向量 $C$**。通常使用 RNN 或 LSTM，取最后一个时间步的隐藏状态作为 $C$。
+
+**解码器（Decoder）**：接收上下文向量 $C$，逐个生成输出序列的 token。它是一个**条件语言模型**——以 $C$ 为条件，预测下一个词。
+
+以 "I love you" → "我爱你" 的翻译为例：
+
+```text
+编码器阶段：
+  t=1: RNN("I")       → h_1
+  t=2: RNN("love")    → h_2
+  t=3: RNN("you")     → h_3 = C  (上下文向量)
+
+解码器阶段：
+  t=1: 输入 <SOS>，状态=C  → 生成 "我"
+  t=2: 输入 "我"，状态更新  → 生成 "爱"
+  t=3: 输入 "爱"，状态更新  → 生成 "你"
+  t=4: 输入 "你"，状态更新  → 生成 <EOS> (停止)
+```
+
+### 3.3 解码器的自回归生成
+
+解码器采用**自回归（Auto-regressive）**方式生成：每一步的输出作为下一步的输入。这与 GPT 等现代 LLM 的生成方式本质相同。
+
+```text
+解码器初始化：h'_0 = C（编码器最终状态）
+时间步 t=1：输入 <SOS>，输出 y_1
+时间步 t=2：输入 y_1，输出 y_2
+时间步 t=3：输入 y_2，输出 y_3
+...
+直到生成 <EOS> 或达到最大长度
+```
+
+在每个时间步，解码器的隐藏状态 $h'_t$ 经过一个全连接层 + Softmax，计算词表上每个词的概率分布，选择概率最高的词作为输出。
+
+### 3.4 两种上下文向量的使用方式
+
+编码器输出的上下文向量 $C$ 有两种使用策略：
+
+**策略一：作为解码器的初始状态**
+
+这是最经典的做法。将 $C$ 经过适配层后，作为解码器 RNN 的初始隐藏状态 $h'_0$。
+
+```text
+h'_0 = Linear(C)    // 适配维度
+h'_t = RNN(h'_{t-1}, y_{t-1})   // 逐时间步解码
+```
+
+**策略二：作为解码器每个时间步的额外输入**
+
+将 $C$ 与每步的词嵌入拼接或相加，持续为解码器提供全局信息：
+
+```text
+rnn_input = Concat(Embed(y_{t-1}), C)
+h'_t = RNN(rnn_input, h'_{t-1})
+```
+
+两种方式都无法从根本上解决信息瓶颈问题（详见第 4 节），但策略二在每步都"提醒"解码器全局信息是什么，理论上对抗遗忘更好。
+
+### 3.5 PyTorch 实现
+
+下面是 Seq2Seq 编码器和解码器的精简实现：
+
+```python
+import torch
+import torch.nn as nn
+
+class Encoder(nn.Module):
+    def __init__(self, vocab_size, hidden_size, num_layers):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, hidden_size)
+        self.rnn = nn.LSTM(
+            input_size=hidden_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+        )
+
+    def forward(self, x):
+        embedded = self.embedding(x)
+        _, (hidden, cell) = self.rnn(embedded)
+        return hidden, cell
+
+
+class Decoder(nn.Module):
+    def __init__(self, vocab_size, hidden_size, num_layers):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, hidden_size)
+        self.rnn = nn.LSTM(
+            input_size=hidden_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+        )
+        self.fc = nn.Linear(hidden_size, vocab_size)
+
+    def forward(self, x, hidden, cell):
+        x = x.unsqueeze(1)
+        embedded = self.embedding(x)
+        output, (hidden, cell) = self.rnn(embedded, (hidden, cell))
+        prediction = self.fc(output.squeeze(1))
+        return prediction, hidden, cell
+```
+
+注意解码器的 `forward` 函数一次只处理一个时间步——这种设计是为了支持**高效推理**（缓存状态，避免重复计算）。
+
+## 4 Seq2Seq 的信息瓶颈问题
+
+### 4.1 问题本质
+
+Seq2Seq 架构有一个根本性的缺陷：编码器和解码器之间唯一的沟通桥梁就是一个**固定长度的上下文向量 $C$**。
+
+```text
+编码器读入 50 个词 → 压缩成 1 个 256 维向量 C → 解码器根据 C 生成 60 个词
+```
+
+这就好比让一个人阅读一篇长文，然后仅凭**一句话**的摘要去复述全文——必然会丢失大量细节。
+
+### 4.2 信息稀释
+
+当输入序列很长时，RNN 编码器需要经过很多步才能处理完整个序列。在这个过程中，早期输入的信息会被后续输入不断"稀释"：
+
+```text
+t=1:  h_1 包含 "两个" 的信息          （信息浓度 100%）
+t=2:  h_2 包含 "两个"+"黄鹂"          （各约 50%）
+t=3:  h_3 包含 "两个"+"黄鹂"+"鸣"     （各约 33%）
+...
+t=7:  h_7 包含全部 7 个词的信息        （"两个" 的信息已被稀释到极低）
+```
+
+最终的上下文向量 $C = h_7$ 中，"两个"的信息可能已经非常微弱。
+
+### 4.3 信息无差别
+
+即使 $C$ 完美地编码了所有信息，解码器在生成**每一个词**时使用的都是**同一个** $C$。以对联任务为例：
+
+```text
+上联："两个 黄鹂 鸣 翠柳"
+期望下联："一行 白鹭 上 青天"
+
+生成 "一行" 时应重点参考 "两个"
+生成 "白鹭" 时应重点参考 "黄鹂"
+生成 "上"   时应重点参考 "鸣"
+生成 "青天" 时应重点参考 "翠柳"
+```
+
+但标准 Seq2Seq 中，解码器在每一步看到的都是同一个 $C$，无法有选择性地关注输入的不同部分。这种**缺乏倾向性**的问题，直接导致了翻译质量的下降。
+
+### 4.4 信息瓶颈 vs 长距离依赖
+
+这两个问题容易混淆，但发生在不同层面：
+
+```text
+长距离依赖：  RNN 内部的问题
+              信息在单一序列处理过程中因梯度累乘而衰减
+              LSTM 通过门控机制缓解
+
+信息瓶颈：    Encoder-Decoder 架构层面的问题
+              编码器和解码器之间只有一个固定长度的桥梁
+              无论编码器多强大，都无法绕过这个瓶颈
+```
+
+LSTM 可以让编码器更好地"记住"输入序列的信息，但它不能改变"所有信息必须压缩成一个向量"这个架构限制。这是 Seq2Seq 架构的根本缺陷。
+
+## 5 Seq2Seq 的训练：Teacher Forcing
+
+### 5.1 训练与推理的差异
+
+Seq2Seq 在训练和推理时，解码器的工作模式有显著差异：
+
+```text
+训练时（Teacher Forcing）：
+  解码器输入是真实的上一个词（来自训练数据）
+  t=1: 输入 <SOS> → 预测 y_1，但下一步输入的是真实的 y_1（不是预测的 y_1）
+  t=2: 输入 y_1 → 预测 y_2，但下一步输入的是真实的 y_2
+
+推理时（自回归）：
+  解码器输入是自己上一步的预测
+  t=1: 输入 <SOS> → 预测 y_1
+  t=2: 输入 y_1(预测) → 预测 y_2
+  t=3: 输入 y_2(预测) → 预测 y_3
+```
+
+### 5.2 为什么需要 Teacher Forcing
+
+如果在训练时也使用自回归模式，有两个问题：
+
+1. **误差累积**：训练初期模型预测不准，错误的预测会被喂入下一步，导致错误不断放大，收敛极慢
+2. **无法并行**：每一步都依赖上一步的预测结果，训练过程是串行的，效率低下
+
+Teacher Forcing 通过在训练时使用真实标签作为输入，避免了这两个问题。
+
+### 5.3 Teacher Forcing 的实现
+
+```python
+class Seq2Seq(nn.Module):
+    def __init__(self, encoder, decoder, device):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.device = device
+
+    def forward(self, src, trg, teacher_forcing_ratio=0.5):
+        batch_size = src.shape[0]
+        trg_len = trg.shape[1]
+        trg_vocab_size = self.decoder.fc.out_features
+
+        outputs = torch.zeros(batch_size, trg_len, trg_vocab_size).to(self.device)
+        hidden, cell = self.encoder(src)
+
+        input_token = trg[:, 0]  # <SOS>
+
+        for t in range(1, trg_len):
+            output, hidden, cell = self.decoder(input_token, hidden, cell)
+            outputs[:, t, :] = output
+
+            # 以一定概率使用 Teacher Forcing
+            use_teacher_forcing = torch.rand(1).item() < teacher_forcing_ratio
+            top1 = output.argmax(1)
+            input_token = trg[:, t] if use_teacher_forcing else top1
+
+        return outputs
+```
+
+`teacher_forcing_ratio` 控制使用真实标签的概率。训练初期通常设为较高值（如 0.5-1.0），随着训练推进逐渐降低，让模型逐渐适应自己的预测。
+
+### 5.4 Scheduled Sampling
+
+Teacher Forcing 的一个问题：训练时模型总是看到正确的前文，但推理时必须处理自己的错误。这导致**训练和推理之间的分布不匹配（Exposure Bias）**。
+
+**Scheduled Sampling** 是一种改进策略：随着训练进行，逐渐降低 Teacher Forcing 的概率，让模型逐步适应自回归模式：
+
+```text
+训练初期：teacher_forcing_ratio = 1.0（完全使用真实标签）
+训练中期：teacher_forcing_ratio = 0.5（一半真实一半预测）
+训练后期：teacher_forcing_ratio = 0.1（几乎完全自回归）
+```
+
+## 6 Seq2Seq 的应用
+
+### 6.1 机器翻译
+
+Seq2Seq 最经典的应用就是**神经机器翻译（NMT）**。2014 年，Sutskever 等人首次证明，基于 LSTM 的 Seq2Seq 模型可以达到与传统统计机器翻译相媲美的翻译质量。
+
+### 6.2 文本摘要
+
+将长文本压缩为短摘要，也是典型的 Seq2Seq 任务。编码器读入原文，解码器生成摘要。
+
+### 6.3 对话系统
+
+聊天机器人可以用 Seq2Seq 构建：编码器理解用户输入，解码器生成回复。
+
+### 6.4 更广泛的应用
+
+Seq2Seq 的 Encoder-Decoder 框架是一个通用范式，可以应用于任何"输入一种序列、输出另一种序列"的任务：
+
+```text
+语音识别：  音频特征序列 → 文本序列
+图像描述：  图像特征 → 文本描述
+代码生成：  自然语言 → 代码
+问答系统：  问题+文档 → 答案
+```
+
+## 7 为什么需要注意力机制
+
+让我们用一个具体的例子总结 Seq2Seq 的困境。
+
+假设我们要翻译 "The cat sat on the mat because it was tired"，其中 "it" 指代 "cat"。在标准 Seq2Seq 中：
+
+```text
+编码器将整句话压缩成一个 256 维向量 C
+解码器在生成每个词时都使用同一个 C
+生成 "it" 对应的翻译时，C 中 "cat" 的信息可能已经被稀释
+```
+
+解码器无法"回头看"编码器在处理 "cat" 时产生的那个特定隐藏状态。它只能依赖一个被压缩过的、对所有位置一视同仁的全局摘要。
+
+**我们需要的是：**
+
+```text
+生成 "它" 时 → 重点关注 "cat" 对应的编码器状态
+生成 "很累" 时 → 重点关注 "tired" 对应的编码器状态
+生成其他词时 → 关注对应的源词
+```
+
+这正是**注意力机制**的核心思想：让解码器在每一步都能"回头看"整个输入序列，并动态地决定关注哪个部分。
+
+```text
+标准 Seq2Seq：  编码器 → [C] → 解码器（每步用同一个 C）
+带注意力的：    编码器 → [h_1, h_2, ..., h_T] → 解码器（每步动态计算 C_t）
+```
+
+注意力机制彻底打破了固定长度向量的瓶颈，让解码器可以直接访问编码器每一个时间步的隐藏状态，并根据当前需求分配不同的权重。这不仅解决了信息瓶颈，还提供了天然的**可解释性**——通过可视化注意力权重，我们可以看到模型在翻译每个词时"关注"了源句子的哪些部分。
+
+下一章我们将深入学习注意力机制的数学原理和实现细节。
+
+## 8 常见误区
+
+**误区 1："Seq2Seq 已经过时了，不需要学"**
+
+Seq2Seq 的 Encoder-Decoder 框架是现代 LLM 的基础。GPT 是 Decoder-only 架构，T5 是完整的 Encoder-Decoder 架构。理解 Seq2Seq 是理解这些模型的前提。
+
+**误区 2："Teacher Forcing 只是训练加速技巧"**
+
+Teacher Forcing 不仅是加速技巧，它还影响模型的学习质量。没有 Teacher Forcing，训练初期的误差累积会导致模型很难收敛。但它也引入了 Exposure Bias 问题，需要 Scheduled Sampling 等策略来缓解。
+
+**误区 3："信息瓶颈是因为编码器不够好"**
+
+即使用最强的 LSTM 编码器，信息瓶颈依然存在。问题不在编码器的能力，而在架构设计——所有信息必须通过一个固定长度的向量传递。这是架构层面的根本限制。
+
+**误区 4："增加上下文向量的维度就能解决信息瓶颈"**
+
+增加维度可以提供更多容量，但不能解决"无差别"的问题。解码器在每一步仍然使用同一个向量，无法有选择性地关注输入的不同部分。
+
+## 小结
+
+本章从 NLP/LLM 视角介绍了 RNN 与 Seq2Seq 架构：
+
+1. **RNN** 通过隐藏状态的循环传递处理序列数据，LSTM 通过门控机制缓解了梯度消失问题
+2. **Seq2Seq** 由编码器和解码器组成，是处理"变长输入→变长输出"任务的经典方案
+3. **Teacher Forcing** 是 Seq2Seq 训练的核心策略，用真实标签替代模型预测作为下一步输入
+4. **信息瓶颈**是 Seq2Seq 的根本缺陷——固定长度的上下文向量无法承载长序列的全部信息
+5. 注意力机制正是为了解决信息瓶颈而诞生的，它允许解码器在每一步动态地关注输入的不同部分
+
+下一章我们将深入注意力机制——这不仅是 Seq2Seq 的改进方案，更是 Transformer 架构的核心组件，是理解现代大语言模型的关键。
+
+## 进一步阅读
+
+- Sutskever, I. et al. (2014). *Sequence to Sequence Learning with Neural Networks*. NeurIPS 2014. arXiv:1409.3215
+- Cho, K. et al. (2014). *Learning Phrase Representations using RNN Encoder-Decoder for Statistical Machine Translation*. EMNLP 2014. arXiv:1406.1078
+- Bengio, S. et al. (2015). *Scheduled Sampling for Sequence Prediction with Recurrent Neural Networks*. NeurIPS 2015. arXiv:1506.03099
+- Hochreiter, S. & Schmidhuber, J. (1997). *Long Short-Term Memory*. Neural Computation, 9(8), 1735-1780
+- Bahdanau, D. et al. (2014). *Neural Machine Translation by Jointly Learning to Align and Translate*. arXiv:1409.0473

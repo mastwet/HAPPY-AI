@@ -1,0 +1,226 @@
+---
+title: 34 预训练
+description: 数据处理、分布式训练、DeepSpeed
+---
+
+# 34 预训练
+
+预训练是 LLM 的"基础教育"——在海量文本上无监督学习语言知识和世界知识。这一章覆盖预训练的全流程：数据准备、训练策略、分布式训练。
+
+## 预训练的目标
+
+预训练的核心目标是**学习语言的统计规律**。通过预测下一个 Token（自回归），模型被迫学会：
+
+- 语法和句法结构
+- 事实性知识（"巴黎是法国的首都"）
+- 推理模式（因果关系、逻辑链）
+- 代码和数学
+
+预训练不需要人工标注——文本本身就是监督信号。
+
+## 预训练数据来源
+
+| 数据集 | 大小 | 特点 |
+|--------|------|------|
+| Common Crawl | PB 级 | 网页爬取，噪声大 |
+| Wikipedia | ~20GB | 高质量百科 |
+| Books（Books3） | ~100GB | 长文本、叙述性 |
+| The Pile | 800GB | 22 个子集混合 |
+| RedPajama | 1.2T tokens | 开源复现 LLaMA |
+| StarCoder Data | 数 TB | 代码数据 |
+| CulturaX | 数 TB | 多语言网页 |
+
+**关键原则**：数据质量和多样性比数量更重要。LIMA 论文证明，1000 条高质量数据就能训出好模型。
+
+## 数据清洗与去重
+
+原始网页数据充满噪声，必须清洗。
+
+### 清洗步骤
+
+```text
+1. 语言检测 → 过滤非目标语言
+2. 质量过滤 → 删除低质量（广告、乱码、重复）
+3. 敏感内容过滤 → PII（个人信息）、有害内容
+4. 去重 → MinHash + LSH 模糊去重
+5. 打包 → 拼接成固定长度序列
+```
+
+### MinHash 去重原理
+
+```python
+import hashlib
+from datasketch import MinHash, MinHashLSH
+
+def create_minhash(text, num_perm=128):
+    m = MinHash(num_perm=num_perm)
+    for word in text.split():
+        m.update(word.encode("utf-8"))
+    return m
+
+# 建立 LSH 索引（阈值 0.8 = 80% 相似度判定为重复）
+lsh = MinHashLSH(threshold=0.8, num_perm=128)
+
+for doc_id, text in enumerate(documents):
+    mh = create_minhash(text)
+    lsh.insert(str(doc_id), mh)
+
+# 查询相似文档
+query_mh = create_minhash("新文档内容")
+result = lsh.query(query_mh)  # 返回相似文档 ID
+```
+
+## 数据格式与打包
+
+预训练数据通常拼接成固定长度的 Token 序列：
+
+```python
+def pack_documents(tokenizer, documents, max_length=2048):
+    """将多个文档拼接成固定长度序列"""
+    all_tokens = []
+    for doc in documents:
+        tokens = tokenizer.encode(doc)
+        all_tokens.extend(tokens)
+        all_tokens.append(tokenizer.eos_token_id)
+
+    # 切分为 max_length 的块
+    chunks = []
+    for i in range(0, len(all_tokens), max_length):
+        chunk = all_tokens[i:i + max_length]
+        if len(chunk) == max_length:
+            chunks.append(chunk)
+    return chunks
+```
+
+## 训练超参数选择
+
+| 超参数 | 典型值 | 说明 |
+|--------|--------|------|
+| 学习率 | 1e-4 ~ 3e-4 | 模型越大，学习率越小 |
+| Warmup Steps | 1000-2000 | 从 0 线性升到目标学习率 |
+| LR Schedule | Cosine Decay | 余弦衰减到 0 |
+| Batch Size | 1M-4M tokens | 全局 batch（所有 GPU 之和） |
+| Weight Decay | 0.1 | AdamW 正则化 |
+| Gradient Clip | 1.0 | 防止梯度爆炸 |
+
+### 学习率调度
+
+```python
+import math
+
+def cosine_lr(step, total_steps, warmup_steps, max_lr):
+    if step < warmup_steps:
+        return max_lr * step / warmup_steps
+    progress = (step - warmup_steps) / (total_steps - warmup_steps)
+    return max_lr * 0.5 * (1 + math.cos(math.pi * progress))
+```
+
+## 分布式训练
+
+单卡训练 7B 模型需要 ~28GB 显存（FP32），加上优化器状态和梯度，至少需要 100GB+。分布式训练是刚需。
+
+### 数据并行（DDP）
+
+每个 GPU 持有完整模型副本，处理不同的数据批次，梯度同步。
+
+```text
+GPU 0: Model 副本 → 数据批次 0 → 梯度 AllReduce
+GPU 1: Model 副本 → 数据批次 1 → 梯度 AllReduce
+GPU 2: Model 副本 → 数据批次 2 → 梯度 AllReduce
+```
+
+### ZeRO 优化（DeepSpeed）
+
+DeepSpeed 的 ZeRO（Zero Redundancy Optimizer）把优化器状态、梯度、参数分片到各 GPU：
+
+| ZeRO Stage | 分片内容 | 显存节省 |
+|------------|---------|---------|
+| Stage 1 | 优化器状态 | ~4x |
+| Stage 2 | + 梯度 | ~8x |
+| Stage 3 | + 参数 | ~Nx（N=GPU 数） |
+
+### 模型并行
+
+当模型大到单卡放不下时：
+
+- **Tensor Parallel**：把矩阵切分到多个 GPU（层内并行）
+- **Pipeline Parallel**：把不同层放到不同 GPU（层间并行）
+
+## DeepSpeed 实战
+
+### 配置文件（ZeRO-2）
+
+```json
+{
+    "train_batch_size": 32,
+    "gradient_accumulation_steps": 4,
+    "fp16": {"enabled": true},
+    "zero_optimization": {
+        "stage": 2,
+        "offload_optimizer": {"device": "cpu"}
+    },
+    "gradient_clipping": 1.0,
+    "optimizer": {
+        "type": "AdamW",
+        "params": {"lr": 2e-4, "weight_decay": 0.1}
+    }
+}
+```
+
+### 启动训练
+
+```bash
+deepspeed --num_gpus=4 train.py \
+    --deepspeed ds_config.json \
+    --model_name_or_path Qwen/Qwen2.5-1.5B \
+    --data_path data/pretrain.jsonl \
+    --output_dir output/pretrain
+```
+
+## 训练监控
+
+关注这几个指标：
+
+- **Loss 曲线**：应该稳步下降，突然跳升（loss spike）说明有问题
+- **Grad Norm**：梯度范数，过大说明梯度爆炸
+- **学习率**：确认 warmup 和 cosine decay 按预期执行
+- **GPU 利用率**：低于 80% 说明 I/O 瓶颈
+
+```python
+# 用 wandb 监控
+import wandb
+wandb.init(project="llm-pretrain")
+
+for step, loss in enumerate(losses):
+    wandb.log({
+        "loss": loss,
+        "lr": scheduler.get_lr(),
+        "grad_norm": grad_norm,
+    }, step=step)
+```
+
+## 常见问题
+
+| 问题 | 原因 | 解决方案 |
+|------|------|---------|
+| Loss spike | 学习率太大、坏数据 | 降低 LR、过滤数据 |
+| 梯度爆炸 | 序列太长、学习率大 | Gradient Clipping |
+| Loss 不收敛 | 学习率太小、数据太少 | 调大 LR、增加数据 |
+| NaN | 数值溢出 | 用 FP16/BF16、检查数据 |
+| GPU 利用率低 | 数据加载慢 | 增加 num_workers |
+
+## 小结
+
+| 概念 | 说明 |
+|------|------|
+| 预训练目标 | 自回归语言建模（预测下一个 Token） |
+| 数据清洗 | 语言检测 → 质量过滤 → 去重 → 打包 |
+| 学习率策略 | Warmup + Cosine Decay |
+| 分布式 | DDP（数据并行）、ZeRO（显存优化）、TP/PP（模型并行） |
+| DeepSpeed | ZeRO-1/2/3，CPU Offload |
+
+## 进一步阅读
+
+1. **Touvron et al., 2023.** *LLaMA: Open and Efficient Foundation Language Models.* [arXiv:2302.13971](https://arxiv.org/abs/2302.13971) — 数据配方
+2. **Rajbhandari et al., 2020.** *ZeRO: Memory Optimizations Toward Training Trillion Parameter Models.* [arXiv:1910.02054](https://arxiv.org/abs/1910.02054) — DeepSpeed ZeRO
+3. **Penedo et al., 2023.** *The RefinedWeb Dataset for Falcon LLM.* [arXiv:2306.01116](https://arxiv.org/abs/2306.01116) — 数据清洗

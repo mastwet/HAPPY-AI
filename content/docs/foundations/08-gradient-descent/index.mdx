@@ -1,0 +1,321 @@
+---
+title: 08 梯度下降
+description: 机器学习的核心优化方法
+---
+
+# 08 梯度下降
+
+梯度下降（Gradient Descent）是机器学习中最核心的优化算法，几乎所有模型训练都依赖它。
+
+## 为什么需要梯度下降
+
+### 优化问题
+
+机器学习的本质是**最小化损失函数**：
+
+$$\min_{\mathbf{\theta}} J(\mathbf{\theta})$$
+
+其中 $$J(\mathbf{\theta})$$ 是损失函数，$$\mathbf{\theta}$$ 是模型参数。
+
+### 解析解 vs 数值解
+
+| 方法 | 适用场景 | 局限 |
+|------|---------|------|
+| 解析解 | 简单问题（如线性回归） | 复杂模型无法求解 |
+| 数值解（梯度下降） | 几乎所有问题 | 需要迭代，可能陷入局部最优 |
+
+## 梯度下降的核心思想
+
+### 类比：下山
+
+想象你在山上，要找到山谷的最低点。你看不到全局，只能看到脚下的坡度。
+
+```
+        损失函数值
+            │
+            │      ╱╲
+            │     ╱  ╲
+            │    ╱    ╲
+            │   ╱      ╲
+            │  ╱   ●    ╲
+            │ ╱          ╲
+            └──────────────────→ 参数值
+```
+
+- **梯度**：坡度的方向和大小
+- **负梯度方向**：下坡最快的方向
+- **步长（学习率）**：每一步走多远
+
+### 为什么梯度方向是函数增长最快的方向？
+
+**泰勒展开**：
+
+$$f(\mathbf{x} + \Delta \mathbf{x}) \approx f(\mathbf{x}) + \nabla f(\mathbf{x})^T \Delta \mathbf{x}$$
+
+当 $$\Delta \mathbf{x}$$ 与 $$\nabla f(\mathbf{x})$$ 同向时，$$f$$ 增长最快。
+当 $$\Delta \mathbf{x}$$ 与 $$\nabla f(\mathbf{x})$$ 反向时，$$f$$ 下降最快。
+
+### 数学表达
+
+$$\mathbf{\theta}_{t+1} = \mathbf{\theta}_t - \alpha \nabla J(\mathbf{\theta}_t)$$
+
+其中：
+- $$\mathbf{\theta}$$：模型参数
+- $$\alpha$$：学习率
+- $$\nabla J$$：损失函数的梯度
+
+
+![损失函数曲面示意](/images/08-loss-surface.png)
+
+*损失函数曲面示意*
+
+## 三种梯度下降变体
+
+### 1. 批量梯度下降（Batch GD）
+
+**每次迭代使用全部数据**：
+
+$$\mathbf{\theta}_{t+1} = \mathbf{\theta}_t - \alpha \frac{1}{\text{m}} \sum_{i=1}^{\text{m}} \nabla J_i(\mathbf{\theta}_t)$$
+
+```python
+def batch_gradient_descent(X, y, lr=0.01, epochs=1000):
+    m = len(y)
+    w, b = 0, 0
+    
+    for _ in range(epochs):
+        # 计算所有样本的梯度
+        y_pred = w * X + b
+        dw = -(2/m) * np.sum((y - y_pred) * X)
+        db = -(2/m) * np.sum(y - y_pred)
+        
+        # 更新参数
+        w -= lr * dw
+        b -= lr * db
+    
+    return w, b
+```
+
+**优点**：
+- 梯度估计准确
+- 稳定收敛
+
+**缺点**：
+- 大数据集计算慢
+- 内存占用大
+
+### 2. 随机梯度下降（SGD）
+
+**每次迭代使用一个样本**：
+
+$$\mathbf{\theta}_{t+1} = \mathbf{\theta}_t - \alpha \nabla J_i(\mathbf{\theta}_t)$$
+
+```python
+def stochastic_gradient_descent(X, y, lr=0.01, epochs=1000):
+    m = len(y)
+    w, b = 0, 0
+    
+    for _ in range(epochs):
+        for i in range(m):
+            # 随机选择一个样本
+            idx = np.random.randint(m)
+            xi, yi = X[idx], y[idx]
+            
+            # 计算梯度
+            y_pred = w * xi + b
+            dw = -2 * (yi - y_pred) * xi
+            db = -2 * (yi - y_pred)
+            
+            # 更新参数
+            w -= lr * dw
+            b -= lr * db
+    
+    return w, b
+```
+
+**优点**：
+- 每次迭代快
+- 可以跳出局部最优
+
+**缺点**：
+- 梯度估计噪声大
+- 收敛不稳定
+
+### 3. 小批量梯度下降（Mini-batch GD）
+
+**每次迭代使用一小批样本（通常 32-512）**：
+
+$$\mathbf{\theta}_{t+1} = \mathbf{\theta}_t - \alpha \frac{1}{b} \sum_{i=1}^{b} \nabla J_i(\mathbf{\theta}_t)$$
+
+```python
+def mini_batch_gradient_descent(X, y, batch_size=32, lr=0.01, epochs=1000):
+    m = len(y)
+    w, b = 0, 0
+    
+    for _ in range(epochs):
+        # 随机打乱数据
+        indices = np.random.permutation(m)
+        
+        for i in range(0, m, batch_size):
+            # 获取小批量
+            batch_idx = indices[i:i+batch_size]
+            X_batch = X[batch_idx]
+            y_batch = y[batch_idx]
+            
+            # 计算梯度
+            y_pred = w * X_batch + b
+            dw = -(2/len(batch_idx)) * np.sum((y_batch - y_pred) * X_batch)
+            db = -(2/len(batch_idx)) * np.sum(y_batch - y_pred)
+            
+            # 更新参数
+            w -= lr * dw
+            b -= lr * db
+    
+    return w, b
+```
+
+**优点**：
+- 平衡了计算效率和梯度估计的准确性
+- 现代深度学习的主流选择
+
+
+![梯度下降路径示意](/images/08-gd-path.png)
+
+*梯度下降路径示意*
+
+## 学习率的选择
+
+### 学习率过大
+
+- 损失函数震荡，无法收敛
+- 可能发散
+
+### 学习率过小
+
+- 收敛极慢
+- 可能陷入局部最优
+
+### 学习率调度
+
+**固定学习率**：
+
+```python
+lr = 0.01
+```
+
+**学习率衰减**：
+
+```python
+# 步长衰减
+lr = initial_lr * (decay_rate ** (epoch // step_size))
+
+# 指数衰减
+lr = initial_lr * np.exp(-decay_rate * epoch)
+```
+
+**自适应学习率**：
+
+| 算法 | 特点 |
+|------|------|
+| AdaGrad | 累积梯度平方，学习率逐渐减小 |
+| RMSprop | 使用移动平均，避免学习率过小 |
+| Adam | 结合动量和自适应学习率，最常用 |
+
+```python
+# 使用 Adam 优化器（PyTorch）
+import torch.optim as optim
+
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+```
+
+## 动量（Momentum）
+
+### 问题
+
+SGD 在梯度方向变化剧烈的区域会震荡，收敛慢。
+
+### 解决方案
+
+引入"动量"，像滚雪球一样累积之前的梯度方向：
+
+$$\mathbf{v}_t = \beta \mathbf{v}_{t-1} + (1-\beta) \nabla J(\mathbf{\theta}_t)$$
+
+$$\mathbf{\theta}_{t+1} = \mathbf{\theta}_t - \alpha \mathbf{v}_t$$
+
+```python
+def sgd_with_momentum(X, y, lr=0.01, momentum=0.9, epochs=1000):
+    w, b = 0, 0
+    vw, vb = 0, 0  # 速度
+    
+    for _ in range(epochs):
+        # 计算梯度
+        y_pred = w * X + b
+        dw = -(2/m) * np.sum((y - y_pred) * X)
+        db = -(2/m) * np.sum(y - y_pred)
+        
+        # 更新速度
+        vw = momentum * vw + (1 - momentum) * dw
+        vb = momentum * vb + (1 - momentum) * db
+        
+        # 更新参数
+        w -= lr * vw
+        b -= lr * vb
+    
+    return w, b
+```
+
+## 可视化对比
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+# 定义损失函数（碗状）
+def loss_function(x, y):
+    return x**2 + 10*y**2
+
+# 梯度
+def gradient(x, y):
+    return np.array([2*x, 20*y])
+
+# 可视化
+x = np.linspace(-2, 2, 100)
+y = np.linspace(-2, 2, 100)
+X, Y = np.meshgrid(x, y)
+Z = loss_function(X, Y)
+
+plt.contour(X, Y, Z, levels=20, cmap='viridis')
+plt.xlabel('x')
+plt.ylabel('y')
+plt.title('Loss Landscape')
+plt.colorbar(label='Loss')
+plt.show()
+```
+
+## 常见问题与解决方案
+
+| 问题 | 表现 | 解决方案 |
+|------|------|---------|
+| 学习率过大 | 损失震荡，无法收敛 | 减小学习率 |
+| 学习率过小 | 收敛极慢 | 增大学习率或使用学习率调度 |
+| 局部最优 | 损失停滞在较高值 | 使用动量、随机初始化 |
+| 鞍点 | 梯度接近零，停滞 | Adam、RMSprop |
+| 梯度消失 | 深层网络梯度趋近于零 | ReLU、残差连接 |
+| 梯度爆炸 | 梯度变得极大 | 梯度裁剪 |
+
+## 小结
+
+| 变体 | 每次迭代样本数 | 优点 | 缺点 |
+|------|-------------|------|------|
+| 批量 GD | 全部 | 梯度准确 | 计算慢 |
+| SGD | 1个 | 计算快，可跳出局部最优 | 噪声大 |
+| 小批量 GD | 32-512 | 平衡 | 需要调 batch size |
+
+## 练习
+
+1. 实现批量梯度下降、SGD、小批量梯度下降，比较它们在相同数据集上的收敛速度和稳定性。
+
+2. 实现带动量的 SGD，观察动量参数对收敛的影响。
+
+3. 尝试不同的学习率（如 0.001, 0.01, 0.1, 1.0），观察对收敛的影响。
+
+4. 实现学习率衰减策略（步长衰减、指数衰减），比较与固定学习率的差异。

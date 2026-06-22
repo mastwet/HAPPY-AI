@@ -1,0 +1,1092 @@
+---
+title: 12 反向传播算法
+description: 链式法则、计算图、自动微分
+---
+
+# 12 反向传播算法
+
+反向传播（Backpropagation）是训练神经网络的核心算法，它高效地计算损失函数对每个参数的梯度。
+
+## 为什么需要反向传播
+
+### 问题
+
+神经网络有成千上万个参数，手动计算每个参数的梯度不现实。
+
+### 核心思想
+
+**链式法则（Chain Rule）**：复合函数的导数等于各层导数的乘积。
+
+$$\frac{\partial L}{\partial w_1} = \frac{\partial L}{\partial a_3} \cdot \frac{\partial a_3}{\partial z_3} \cdot \frac{\partial z_3}{\partial a_2} \cdot \frac{\partial a_2}{\partial z_2} \cdot \frac{\partial z_2}{\partial w_1}$$
+
+### 反向传播的历史
+
+反向传播算法的发展经历了几个重要阶段：
+
+| 时间 | 事件 | 意义 |
+|------|------|------|
+| 1960s | 控制论中的反向传播思想 | 理论基础 |
+| 1974 | Werbos 的博士论文 | 首次提出用于神经网络 |
+| 1986 | Rumelhart, Hinton, Williams 的论文 | 重新发现并推广 |
+| 2012 | AlexNet 使用反向传播训练 | 深度学习复兴 |
+| 至今 | 自动微分框架（PyTorch, TensorFlow） | 简化实现 |
+
+## 反向传播的直观理解
+
+### 类比：传球游戏
+
+想象一个传球游戏：
+- **前向传播**：球从队首传到队尾，每个人根据规则传球
+- **反向传播**：球传错了位置，教练从队尾开始，告诉每个人"你传偏了，应该往左/右调整"
+- **梯度**：调整的方向和幅度
+- **链式法则**：每个人的错误都会传递给前一个人，误差逐层累积
+
+### 计算图视角
+
+将神经网络看作一个**计算图**：
+- 每个节点是一个运算（加、乘、激活函数等）
+- 每条边是数据流
+- 反向传播就是在图上从后向前传递梯度
+
+### 核心洞见
+
+反向传播之所以高效，是因为它避免了重复计算：
+- 如果不使用反向传播，计算每个参数的梯度都需要重新前向传播
+- 使用反向传播，每个节点的梯度只计算一次，然后复用
+- 时间复杂度从 $O(n^2)$ 降低到 $O(n)$（$n$ 为节点数）
+
+### 梯度流动的直觉
+
+想象一个多层管道系统：
+- 水从输入端流入，经过各层管道，从输出端流出
+- 如果输出端的水压不对（损失大），我们需要调整各层管道的阀门（参数）
+- 反向传播就是"从后往前"逐层调整阀门，让水压（输出）更接近目标
+
+---
+
+## 链式法则回顾
+
+### 单变量链式法则
+
+$$\frac{dz}{dx} = \frac{dz}{dy} \cdot \frac{dy}{dx}$$
+
+### 多变量链式法则
+
+$$\frac{\partial z}{\partial x} = \frac{\partial z}{\partial u} \cdot \frac{\partial u}{\partial x} + \frac{\partial z}{\partial v} \cdot \frac{\partial v}{\partial x}$$
+
+```python
+import numpy as np
+
+# 示例：z = (x + y)^2
+# dz/dx = 2(x + y)
+
+x, y = 3, 4
+z = (x + y) ** 2
+
+# 手动计算
+dz_dx_manual = 2 * (x + y)
+
+# 数值梯度（用于验证）
+epsilon = 1e-7
+dz_dx_numerical = ((x + epsilon + y) ** 2 - (x - epsilon + y) ** 2) / (2 * epsilon)
+
+print(f"手动计算: {dz_dx_manual}")
+print(f"数值梯度: {dz_dx_numerical}")
+```
+
+### 梯度消失与梯度爆炸
+
+反向传播中最常见的问题是**梯度消失**和**梯度爆炸**。
+
+**梯度消失**：在深层网络中，如果激活函数的导数小于 1（如 Sigmoid 的导数最大值为 0.25），梯度在反向传播时会逐层衰减。对于 $L$ 层网络，梯度大约会衰减为原来的 $(0.25)^L$。当 $L$ 很大时，靠近输入层的梯度几乎为 0，导致这些层的参数无法更新。
+
+**梯度爆炸**：相反，如果权重初始化过大或激活函数导数大于 1，梯度在反向传播时会指数级增长，导致参数更新不稳定。
+
+**解决方案**：
+1. **使用 ReLU 激活函数**：正区间梯度恒为 1，避免梯度消失
+2. **权重初始化**：如 Xavier/Glorot 初始化、He 初始化
+3. **批归一化（Batch Normalization）**：稳定每层的分布
+4. **残差连接（Residual Connection）**：如 ResNet 中的跳跃连接
+5. **梯度裁剪（Gradient Clipping）**：限制梯度的最大值
+
+---
+
+## 计算图
+
+### 什么是计算图
+
+将计算过程表示为节点（变量）和边（操作）的图：
+
+```
+x ──→ [×] ──→ z
+y ──→     
+```
+
+### 前向传播
+
+从左到右计算每个节点的值。
+
+### 反向传播
+
+从右到左计算每个节点的梯度。
+
+```python
+class Value:
+    """支持自动微分的数值类"""
+    def __init__(self, data, _children=(), _op=''):
+        self.data = data
+        self.grad = 0
+        self._prev = set(_children)
+        self._op = _op
+        self._backward = lambda: None
+    
+    def __add__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data + other.data, (self, other), '+')
+        
+        def _backward():
+            self.grad += out.grad
+            other.grad += out.grad
+        out._backward = _backward
+        
+        return out
+    
+    def __mul__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data * other.data, (self, other), '*')
+        
+        def _backward():
+            self.grad += other.data * out.grad
+            other.grad += self.data * out.grad
+        out._backward = _backward
+        
+        return out
+    
+    def __pow__(self, other):
+        assert isinstance(other, (int, float))
+        out = Value(self.data ** other, (self,), f'**{other}')
+        
+        def _backward():
+            self.grad += other * (self.data ** (other - 1)) * out.grad
+        out._backward = _backward
+        
+        return out
+    
+    def backward(self):
+        """反向传播"""
+        # 拓扑排序
+        topo = []
+        visited = set()
+        
+        def build_topo(v):
+            if v not in visited:
+                visited.add(v)
+                for child in v._prev:
+                    build_topo(child)
+                topo.append(v)
+        
+        build_topo(self)
+        
+        # 反向传播
+        self.grad = 1
+        for node in reversed(topo):
+            node._backward()
+    
+    def __repr__(self):
+        return f"Value(data={self.data}, grad={self.grad})"
+
+# 测试
+x = Value(2.0)
+y = Value(3.0)
+z = x * y + x ** 2
+
+print(f"z = {z.data}")  # 10.0
+
+z.backward()
+
+print(f"dz/dx = {x.grad}")  # 7.0 (y + 2x = 3 + 4 = 7)
+print(f"dz/dy = {y.grad}")  # 2.0 (x = 2)
+```
+
+## 神经网络中的反向传播
+
+### 符号定义
+
+| 符号 | 含义 |
+|------|------|
+| **L** | 损失函数 |
+| **y** | 真实标签 |
+| $$\hat{y}$$ | 预测输出 |
+| $$z^{[l]}$$ | 第 **l** 层的线性输出 |
+| $$a^{[l]}$$ | 第 **l** 层的激活输出 |
+| $$W^{[l]}$$ | 第 **l** 层的权重 |
+| $$b^{[l]}$$ | 第 **l** 层的偏置 |
+
+### 输出层梯度
+
+**假设使用 Sigmoid + MSE**：
+
+$$\frac{\partial L}{\partial \hat{y}} = \hat{y} - y$$
+
+$$\frac{\partial L}{\partial z^{[L]}} = (\hat{y} - y) \cdot \sigma'(z^{[L]})$$
+
+$$\frac{\partial L}{\partial W^{[L]}} = (a^{[L-1]})^T \cdot \frac{\partial L}{\partial z^{[L]}}$$
+
+$$\frac{\partial L}{\partial b^{[L]}} = \sum \frac{\partial L}{\partial z^{[L]}}$$
+
+### 隐藏层梯度
+
+$$\frac{\partial L}{\partial z^{[l]}} = \frac{\partial L}{\partial z^{[l+1]}} \cdot (W^{[l+1]})^T \cdot g'(z^{[l]})$$
+
+$$\frac{\partial L}{\partial W^{[l]}} = (a^{[l-1]})^T \cdot \frac{\partial L}{\partial z^{[l]}}$$
+
+$$\frac{\partial L}{\partial b^{[l]}} = \sum \frac{\partial L}{\partial z^{[l]}}$$
+
+## 完整实现
+
+```python
+import numpy as np
+
+class NeuralNetwork:
+    def __init__(self, layers):
+        self.layers = layers
+        self.weights = []
+        self.biases = []
+        
+        for i in range(len(layers) - 1):
+            self.weights.append(np.random.randn(layers[i], layers[i+1]) * 0.01)
+            self.biases.append(np.zeros((1, layers[i+1])))
+    
+    def sigmoid(self, z):
+        return 1 / (1 + np.exp(-z))
+    
+    def sigmoid_derivative(self, a):
+        return a * (1 - a)
+    
+    def forward(self, X):
+        """前向传播"""
+        self.activations = [X]
+        self.z_values = []
+        
+        current = X
+        for i in range(len(self.weights)):
+            z = current @ self.weights[i] + self.biases[i]
+            self.z_values.append(z)
+            current = self.sigmoid(z)
+            self.activations.append(current)
+        
+        return current
+    
+    def backward(self, X, y, learning_rate):
+        """反向传播"""
+        m = X.shape[0]
+        
+        # 初始化梯度
+        d_weights = [np.zeros_like(w) for w in self.weights]
+        d_biases = [np.zeros_like(b) for b in self.biases]
+        
+        # 输出层误差
+        output = self.activations[-1]
+        delta = (output - y) * self.sigmoid_derivative(output)
+        
+        # 输出层梯度
+        d_weights[-1] = self.activations[-2].T @ delta / m
+        d_biases[-1] = np.sum(delta, axis=0, keepdims=True) / m
+        
+        # 反向传播到隐藏层
+        for l in range(len(self.weights) - 2, -1, -1):
+            # 误差反向传播
+            delta = (delta @ self.weights[l+1].T) * self.sigmoid_derivative(self.activations[l+1])
+            
+            # 梯度
+            d_weights[l] = self.activations[l].T @ delta / m
+            d_biases[l] = np.sum(delta, axis=0, keepdims=True) / m
+        
+        # 更新参数
+        for i in range(len(self.weights)):
+            self.weights[i] -= learning_rate * d_weights[i]
+            self.biases[i] -= learning_rate * d_biases[i]
+    
+    def train(self, X, y, epochs=1000, learning_rate=0.1):
+        losses = []
+        
+        for epoch in range(epochs):
+            # 前向传播
+            output = self.forward(X)
+            
+            # 计算损失
+            loss = np.mean((output - y) ** 2)
+            losses.append(loss)
+            
+            # 反向传播
+            self.backward(X, y, learning_rate)
+            
+            if epoch % 100 == 0:
+                print(f"Epoch {epoch}, Loss: {loss:.6f}")
+        
+        return losses
+
+# 测试：XOR 问题
+X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+y = np.array([[0], [1], [1], [0]])
+
+nn = NeuralNetwork([2, 4, 1])
+losses = nn.train(X, y, epochs=10000, learning_rate=0.5)
+
+print("\n预测结果:")
+print(nn.forward(X))
+print("\n真实标签:")
+print(y)
+```
+
+## 梯度检查
+
+验证反向传播实现是否正确：
+
+```python
+def gradient_check(model, X, y, epsilon=1e-7):
+    """数值梯度检查"""
+    # 前向传播计算损失
+    output = model.forward(X)
+    loss = np.mean((output - y) ** 2)
+    
+    # 检查每一层的权重
+    for l in range(len(model.weights)):
+        W = model.weights[l]
+        dW_numerical = np.zeros_like(W)
+        
+        for i in range(W.shape[0]):
+            for j in range(W.shape[1]):
+                # 正向扰动
+                W[i, j] += epsilon
+                loss_plus = np.mean((model.forward(X) - y) ** 2)
+                
+                # 负向扰动
+                W[i, j] -= 2 * epsilon
+                loss_minus = np.mean((model.forward(X) - y) ** 2)
+                
+                # 恢复
+                W[i, j] += epsilon
+                
+                # 数值梯度
+                dW_numerical[i, j] = (loss_plus - loss_minus) / (2 * epsilon)
+        
+        print(f"Layer {l+1} 数值梯度范数: {np.linalg.norm(dW_numerical):.6f}")
+
+# 使用
+gradient_check(nn, X, y)
+```
+
+## 自动微分框架
+
+### PyTorch 自动微分
+
+```python
+import torch
+import torch.nn as nn
+
+# 定义模型
+class SimpleNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(2, 4)
+        self.fc2 = nn.Linear(4, 1)
+    
+    def forward(self, x):
+        x = torch.sigmoid(self.fc1(x))
+        x = torch.sigmoid(self.fc2(x))
+        return x
+
+# 创建模型
+model = SimpleNet()
+
+# 定义损失函数和优化器
+criterion = nn.MSELoss()
+optimizer = torch.optim.SGD(model.parameters(), lr=0.5)
+
+# 数据
+X = torch.tensor([[0., 0.], [0., 1.], [1., 0.], [1., 1.]])
+y = torch.tensor([[0.], [1.], [1.], [0.]])
+
+# 训练
+for epoch in range(10000):
+    # 前向传播
+    output = model(X)
+    loss = criterion(output, y)
+    
+    # 反向传播
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    
+    if epoch % 1000 == 0:
+        print(f"Epoch {epoch}, Loss: {loss.item():.6f}")
+
+print("\n预测结果:", model(X).detach().numpy())
+```
+
+## 计算图视角：神经网络即 DAG
+
+之前我们用直观类比（传球游戏、管道系统）解释反向传播。现在给出一个**严格的数学视角**：把神经网络建模为有向无环图（Directed Acyclic Graph, DAG），反向传播就是在图上"反向遍历"计算梯度。
+
+### 计算图的形式化定义
+
+一个计算图是一个二元组 $(V, E)$，其中：
+- $V$ 是节点集合，每个节点 $v_i$ 表示一个**变量**（中间结果或最终输出）
+- $E$ 是有向边集合，边 $(v_j \to v_i)$ 表示 $v_i$ 的计算依赖 $v_j$
+
+每个节点关联一个**局部函数** $f_i$，给出该节点的值如何由父节点计算：
+
+$$v_i = f_i(\text{Pa}(v_i))$$
+
+其中 $\text{Pa}(v_i)$ 是 $v_i$ 的父节点集合。
+
+例如计算 $L = (x \cdot y + \sin(x)) \cdot z$ 对应的图：
+
+```
+x ──┬──> [×] ──> [+] ──┬──> [×] ──> L
+    │                  │
+y ──┴──> [×]           │
+                       │
+x ─────────────> [sin]─┘
+                       │
+z ────────────────────┘
+```
+
+每个方框是一个局部函数（$\times$, $+$, $\sin$），每条边是数据流。
+
+### 反向模式 AD（Reverse-Mode AD）就是反向传播
+
+记 $L$ 为最终输出，$v_i$ 为任意中间节点。定义**伴随量（adjoint / cotangent）**：
+
+$$\bar{v}_i = \frac{\partial L}{\partial v_i}$$
+
+反向模式 AD 的目标就是算出所有节点的 $\bar{v}_i$。
+
+**前向阶段**：按拓扑序计算每个 $v_i = f_i(\text{Pa}(v_i))$，并存储中间值。
+
+**反向阶段**：从 $\bar{L} = 1$ 出发，对图上每条边 $(v_j \to v_i)$ 应用链式法则：
+
+$$\bar{v}_j \mathrel{+}= \frac{\partial v_i}{\partial v_j} \cdot \bar{v}_i$$
+
+也就是说，每个父节点累积所有"使用它的子节点传回的梯度"。
+
+### 为什么"反向"是天然的方向？
+
+链式法则是 $\frac{\partial L}{\partial v_j} = \sum_i \frac{\partial v_i}{\partial v_j} \cdot \frac{\partial L}{\partial v_i}$——**父节点的梯度由所有使用它的子节点汇总而来**。这意味着梯度沿"使用关系"反向流动，即从后向前传播。
+
+直觉：**梯度回答的问题是"我变化一点点，最终损失会变化多少？"** 这个信息必须从最终输出开始，沿着"哪些变量影响我"的链条逆流而上。
+
+---
+
+## 反向模式 vs 前向模式：为什么深度学习选反向
+
+AD 有两种实现模式：**前向模式（Forward-Mode）** 和 **反向模式（Reverse-Mode）**。它们都计算精确梯度，但在不同场景下效率差异巨大。
+
+### 前向模式 AD
+
+前向模式对每个**输入维度**分别计算 $\frac{\partial v_i}{\partial x_j}$。它从输入开始，沿计算图正向传播"切线向量"。
+
+对于函数 $f: \mathbb{R}^n \to \mathbb{R}^m$：
+- 前向模式 AD 需要 **$n$ 次传播**才能算出完整雅可比矩阵（每个输入维度一次）
+- 时间复杂度 $O(n \cdot \text{前向时间})$
+- 适合 **$n \ll m$** 的情况（输入维度小）
+
+### 反向模式 AD
+
+反向模式从输出开始，对每个**输出维度**反向传播梯度。对 $f: \mathbb{R}^n \to \mathbb{R}^m$：
+- 反向模式 AD 需要 **$m$ 次传播**才能算出完整雅可比矩阵（每个输出维度一次）
+- 时间复杂度 $O(m \cdot \text{前向时间})$
+- 适合 **$m \ll n$** 的情况（输出维度小）
+
+### 神经网络的关键不对称性
+
+神经网络训练中：
+- **输入维度 $n$**：可能高达百万（图像像素、词嵌入维度）
+- **输出维度 $m$**：通常很小，标量损失函数时 $m = 1$
+
+这就是为什么深度学习几乎**只**用反向模式 AD：一次反向传播就能算出所有输入（即所有参数）的梯度，代价约等于一次前向传播。
+
+| 场景 | 输入维度 $n$ | 输出维度 $m$ | 推荐模式 |
+|------|-------------|-------------|---------|
+| 神经网络训练 | 百万参数 | 1（损失） | **反向模式** |
+| 物理仿真（$f: \mathbb{R}^3 \to \mathbb{R}^3$）| 3 | 3 | 两者相当 |
+| ODE 求解的 Jacobian | $n$ 大 | $n$ 大 | 反向（求 $\lambda^T J$） |
+| 单变量深度 $f: \mathbb{R} \to \mathbb{R}^m$ | 1 | 大 | 前向 |
+
+### PyTorch 的实现：torch.autograd
+
+PyTorch 的 `torch.autograd` 正是反向模式 AD。每次调用 `loss.backward()` 时，它从 `loss` 出发，反向遍历构建好的计算图，为每个 `requires_grad=True` 的参数填充 `.grad` 字段。
+
+```python
+import torch
+
+# 验证反向模式 AD
+x = torch.tensor([2.0, 3.0], requires_grad=True)
+w = torch.tensor([0.5, -1.0], requires_grad=True)
+
+# y = x . w + x[0]^2
+y = (x * w).sum() + x[0] ** 2
+print(f"y = {y.item()}")  # 2*0.5 + 3*(-1) + 4 = 1 - 3 + 4 = 2
+
+y.backward()
+
+# 反向模式给出所有输入的梯度，一次完成
+print(f"∂y/∂x = {x.grad}")  # [w[0] + 2*x[0], w[1]] = [5, -1]
+print(f"∂y/∂w = {w.grad}")  # [x[0], x[1]] = [2, 3]
+```
+
+如果用前向模式，要分别对每个输入维度做一次传播——这里只有 4 个参数，如果模型有 1 亿参数，前向模式要做 1 亿次传播，完全不可行。
+
+---
+
+## 梯度检查：工程实践
+
+实现反向传播后，**怎么知道它算对了？** 数值梯度检查是金标准。
+
+### 原理
+
+对任意参数 $\theta_i$，其解析梯度 $\frac{\partial L}{\partial \theta_i}$ 应该等于**中心差分**：
+
+$$\frac{\partial L}{\partial \theta_i} \approx \frac{L(\theta_i + \epsilon) - L(\theta_i - \epsilon)}{2\epsilon}$$
+
+中心差分的截断误差是 $O(\epsilon^2)$，而前向差分 $\frac{L(\theta_i + \epsilon) - L(\theta_i)}{\epsilon}$ 是 $O(\epsilon)$。取 $\epsilon \approx 10^{-7}$，可以让**截断误差**和**浮点舍入误差**达到平衡（$\epsilon$ 太小时 $\epsilon^2$ 太小但浮点误差大；$\epsilon$ 太大时截断误差大）。
+
+### 相对误差比较
+
+不应该直接比较 $|g_{\text{analytic}} - g_{\text{numerical}}|$，而要用**相对误差**：
+
+$$\text{rel\_err} = \frac{|g_{\text{analytic}} - g_{\text{numerical}}|}{|g_{\text{analytic}}| + |g_{\text{numerical}}| + \delta}$$
+
+其中 $\delta = 10^{-8}$ 防止分母为零。
+
+| 相对误差 | 含义 |
+|---------|------|
+| $\lt 10^{-7}$ | 几乎必然正确 |
+| $10^{-7}$ ~ $10^{-5}$ | 通常正确，可接受 |
+| $10^{-5}$ ~ $10^{-3}$ | 有 bug 但难发现 |
+| $\gt 10^{-3}$ | 必有 bug |
+
+### 一个完整的梯度检查实现
+
+```python
+import numpy as np
+
+def gradient_check(f, x, analytic_grad, eps=1e-7):
+    """
+    参数:
+        f: 接受 x，返回 (loss, grad) 的函数
+        x: 参数向量
+        analytic_grad: 反向传播算出的梯度
+        eps: 扰动大小
+    """
+    # 把 x 拍平，便于索引
+    x_flat = x.flatten()
+    grad_flat = analytic_grad.flatten()
+    n_params = x_flat.size
+
+    # 数值梯度
+    numerical_grad = np.zeros_like(x_flat)
+    for i in range(n_params):
+        x_plus = x_flat.copy()
+        x_plus[i] += eps
+        x_minus = x_flat.copy()
+        x_minus[i] -= eps
+
+        loss_plus, _ = f(x_plus.reshape(x.shape))
+        loss_minus, _ = f(x_minus.reshape(x.shape))
+
+        numerical_grad[i] = (loss_plus - loss_minus) / (2 * eps)
+
+    # 计算相对误差
+    numerator = np.abs(grad_flat - numerical_grad).sum()
+    denominator = np.abs(grad_flat).sum() + np.abs(numerical_grad).sum() + 1e-8
+    rel_error = numerator / denominator
+
+    return rel_error, numerical_grad
+
+# 用法示例
+def toy_loss_fn(x):
+    # L = sum(x_i^3 - 2*x_i)
+    x = x.flatten()
+    grad = 3 * x ** 2 - 2
+    return np.sum(x ** 3 - 2 * x), grad
+
+x_test = np.random.randn(5)
+analytic_grad = 3 * x_test ** 2 - 2  # 解析梯度
+_, f_with_grad = lambda x: toy_loss_fn(x)  # 包装
+
+rel_err, numerical = gradient_check(toy_loss_fn, x_test, analytic_grad)
+print(f"相对误差: {rel_err:.2e}")
+assert rel_err < 1e-7, "反向传播可能有 bug!"
+print("梯度检查通过 ✓")
+```
+
+### 工程实践建议
+
+1. **检查每个层**：分别检查每个参数的梯度，不要整个模型一起（否则错层被掩盖）
+2. **小数据集**：用 1-2 个样本检查（否则 loss 受 batch 影响）
+3. **关闭正则化**：检查时把 weight decay、dropout 设为 0
+4. **加 eps 时小心**：不要破坏计算图的依赖关系
+
+```python
+# 错误做法：直接修改 param.data（不推荐）
+param.data += eps
+# ...
+
+# 正确做法：创建新参数
+param_copy = param.clone()
+param_copy.data += eps
+```
+
+5. **断言失败时的调试**：打印出错参数的索引、值，定位到具体代码行
+
+---
+
+## 数值稳定性：log-sum-exp 技巧
+
+反向传播中常遇到 $\log(\hat{y})$、$\log(\sum e^{z_i})$ 这样的运算。当输入数值很大或很小时，直接计算会**溢出**或**下溢**。
+
+### 一个典型的崩溃场景
+
+交叉熵损失：$\mathcal{L} = -\sum_i y_i \log(\hat{y}_i)$，其中 $\hat{y}_i = \text{softmax}(z_i)$。
+
+```python
+import numpy as np
+
+# 危险：z 全是正数很大时 exp 会溢出
+z = np.array([1000.0, 1001.0, 1002.0])
+exp_z = np.exp(z)
+print(exp_z)  # 全是 inf
+print(exp_z / exp_z.sum())  # 全是 nan
+```
+
+`softmax` 应当对平移不变：$\text{softmax}(z) = \text{softmax}(z - c)$。我们可以减去最大值：
+
+$$\text{softmax}(z_i) = \frac{e^{z_i - \max_j z_j}}{\sum_k e^{z_k - \max_j z_j}}$$
+
+```python
+def softmax_safe(z):
+    z_shift = z - np.max(z, axis=-1, keepdims=True)
+    exp_z = np.exp(z_shift)
+    return exp_z / np.sum(exp_z, axis=-1, keepdims=True)
+```
+
+### log-sum-exp 技巧
+
+类似地，$\log \sum_i e^{z_i}$ 容易溢出。计算：
+
+$$\log \sum_i e^{z_i} = m + \log \sum_i e^{z_i - m}, \quad m = \max_i z_i$$
+
+```python
+def log_sum_exp(z):
+    m = np.max(z, axis=-1, keepdims=True)
+    return m + np.log(np.sum(np.exp(z - m), axis=-1, keepdims=True))
+
+# 数值稳定的 softmax log（交叉熵中常用）
+def log_softmax(z):
+    m = np.max(z, axis=-1, keepdims=True)
+    shifted = z - m
+    return shifted - np.log(np.sum(np.exp(shifted), axis=-1, keepdims=True))
+```
+
+### 避免 $\log(0)$：clip trick
+
+交叉熵里 $y_i \log(\hat{y}_i)$，若 $\hat{y}_i \to 0$，$\log$ 会发散。常用：
+
+```python
+# 方案 1：clip 到 (eps, 1-eps)
+eps = 1e-12
+y_pred_clipped = np.clip(y_pred, eps, 1 - eps)
+
+# 方案 2：直接用 log_softmax + NLLLoss（PyTorch 内部已稳定处理）
+# F.cross_entropy(z, y) = -log_softmax(z)[y]
+```
+
+### 一张稳定性速查表
+
+| 操作 | 危险来源 | 解决方案 |
+|------|---------|---------|
+| `softmax(x)` | $\exp$ 溢出 | 减去最大值 |
+| `log(softmax(x))` | $\log(0)$ | 直接用 `log_softmax` |
+| `log(sum(exp(x)))` | $\exp$ 溢出 | log-sum-exp 技巧 |
+| `x / y` 当 y 接近 0 | 除零 | 加 `eps`，或换算式 |
+| `log(sigmoid(x))` 大 $\|x\|$ | 数值精度 | 用 `logsigmoid` |
+| `pow(0, alpha)` | 0 的非整数次幂 | 加 `eps` 后取对数 |
+
+---
+
+## 消失/爆炸梯度的谱分析
+
+之前我们定性地提过"梯度消失"和"梯度爆炸"。本节给出**严格的数学解释**：用雅可比矩阵的谱（特征值）分析。
+
+### 递归关系
+
+$L$ 层网络中，第 $l$ 层参数 $W^{[l]}$ 的梯度：
+
+$$\frac{\partial \mathcal{L}}{\partial W^{[l]}} = \frac{\partial \mathcal{L}}{\partial \mathbf{a}^{[L]}} \cdot \prod_{k=l+1}^{L} J^{[k]} \cdot \frac{\partial \mathbf{a}^{[l]}}{\partial W^{[l]}}$$
+
+其中 $J^{[k]} = \frac{\partial \mathbf{a}^{[k]}}{\partial \mathbf{a}^{[k-1]}}$ 是第 $k$ 层的雅可比矩阵。
+
+**关键**：梯度被一个 $L - l$ 个雅可比矩阵的**乘积**所支配。
+
+### 谱分析
+
+设每个 $J^{[k]}$ 的谱范数（最大奇异值）是 $\sigma_k$。则乘积的谱范数：
+
+$$\left\| \prod_{k=l+1}^{L} J^{[k]} \right\|_2 \leq \prod_{k=l+1}^{L} \sigma_k$$
+
+- 如果**所有** $\sigma_k > 1$：乘积**指数增长** → **梯度爆炸**
+- 如果**所有** $\sigma_k < 1$：乘积**指数衰减** → **梯度消失**
+- 如果 $\sigma_k \approx 1$：梯度稳定传播 → **这是我们想要的**
+
+### 不同激活函数的 $\sigma$
+
+对 $\mathbf{a}^{[k]} = g(W^{[k]} \mathbf{a}^{[k-1]})$，雅可比 $J^{[k]} = \text{diag}(g'(W^{[k]} \mathbf{a}^{[k-1]})) \cdot W^{[k]}$。
+
+| 激活函数 $g$ | 导数范围 | 典型 $\sigma$ | 倾向 |
+|-------------|---------|--------------|------|
+| Sigmoid | $(0, 0.25]$ | $\leq 0.25 \cdot \|W\|$ | 消失 |
+| Tanh | $(0, 1]$ | $\leq \|W\|$ | 取决于 $W$ |
+| ReLU | $\{0, 1\}$ | $\leq \|W\|$ | 较稳定 |
+| Identity | 1 | $\|W\|$ | 完全取决于初始化 |
+
+### 数值验证：测量梯度范数
+
+```python
+import torch
+import torch.nn as nn
+
+def measure_gradient_norms(depth, activation, init_scale):
+    """构造 depth 层 MLP，返回每层参数梯度的范数"""
+    layers = []
+    for i in range(depth):
+        lin = nn.Linear(64, 64, bias=False)
+        nn.init.normal_(lin.weight, std=init_scale)
+        layers.append(lin)
+    model = nn.Sequential(*layers, activation())
+
+    x = torch.randn(1, 64, requires_grad=True)
+    out = model(x).sum()
+    out.backward()
+
+    norms = []
+    for lin in layers:
+        norms.append(lin.weight.grad.norm().item())
+    return norms
+
+# 实验：观察不同初始化下的梯度传播
+print("深度=20, ReLU, 不同初始化:")
+for scale in [0.5, 1.0, 1.5, 2.0]:
+    norms = measure_gradient_norms(depth=20, activation=nn.ReLU, init_scale=scale)
+    print(f"  init_scale={scale}: grad_norms = {norms[:3]}...{norms[-3:]}")
+
+print("\n深度=20, Sigmoid, init=1.0:")
+norms = measure_gradient_norms(depth=20, activation=nn.Sigmoid, init_scale=1.0)
+print(f"  grad_norms = {norms[:3]}...{norms[-3:]}")
+```
+
+你会看到：
+- Sigmoid：靠近输出的层梯度范数大，靠近输入的层梯度范数极小（消失）
+- ReLU + 大初始化：梯度范数逐层放大（爆炸）
+- ReLU + He 初始化：各层梯度范数在同一数量级（健康）
+
+### 现代缓解方案汇总
+
+| 现象 | 方案 | 原理 |
+|------|------|------|
+| 消失 | ReLU 家族激活 | 梯度恒为 1（在激活侧） |
+| 消失 | 残差连接（ResNet） | $\frac{\partial (x + f(x))}{\partial x} = I + \frac{\partial f}{\partial x}$，恒有单位矩阵项 |
+| 消失/爆炸 | 合适的初始化（He/Xavier） | 保持每层方差稳定 |
+| 消失/爆炸 | 归一化（BatchNorm / LayerNorm） | 强制每层输出在合理范围 |
+| 爆炸 | 梯度裁剪 | 限制 $\|g\| \leq \text{threshold}$ |
+| 消失 | LSTM/GRU 的门控 | 加法路径绕过激活函数 |
+
+---
+
+## 纯 Python 自动微分引擎
+
+前面我们看了简单的 `Value` 类实现。现在扩展它，加入**完整运算（指数、对数、矩阵乘法等）**和**完整的拓扑排序**，做出一个迷你的 PyTorch。
+
+### 完整的 Value 类
+
+```python
+import math
+
+class Value:
+    """支持反向传播的标量值"""
+    def __init__(self, data, _children=(), _op=''):
+        self.data = data
+        self.grad = 0.0
+        self._backward = lambda: None
+        self._prev = set(_children)
+        self._op = _op
+
+    def __repr__(self):
+        return f"Value(data={self.data:.4f}, grad={self.grad:.4f})"
+
+    # ============ 基础运算 ============
+    def __add__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data + other.data, (self, other), '+')
+        def _backward():
+            self.grad += out.grad
+            other.grad += out.grad
+        out._backward = _backward
+        return out
+
+    def __mul__(self, other):
+        other = other if isinstance(other, Value) else Value(other)
+        out = Value(self.data * other.data, (self, other), '*')
+        def _backward():
+            self.grad += other.data * out.grad
+            other.grad += self.data * out.grad
+        out._backward = _backward
+        return out
+
+    def __pow__(self, other):
+        assert isinstance(other, (int, float))
+        out = Value(self.data ** other, (self,), f'**{other}')
+        def _backward():
+            self.grad += other * (self.data ** (other - 1)) * out.grad
+        out._backward = _backward
+        return out
+
+    def __neg__(self):
+        return self * -1
+
+    def __sub__(self, other):
+        return self + (-other)
+
+    def __truediv__(self, other):
+        return self * (other ** -1)
+
+    def __radd__(self, other):
+        return self + other
+
+    def __rmul__(self, other):
+        return self * other
+
+    # ============ 激活函数 ============
+    def tanh(self):
+        x = self.data
+        t = math.tanh(x)
+        out = Value(t, (self,), 'tanh')
+        def _backward():
+            self.grad += (1 - t ** 2) * out.grad
+        out._backward = _backward
+        return out
+
+    def sigmoid(self):
+        # 数值稳定实现
+        x = self.data
+        if x >= 0:
+            s = 1.0 / (1.0 + math.exp(-x))
+        else:
+            e = math.exp(x)
+            s = e / (1.0 + e)
+        out = Value(s, (self,), 'sigmoid')
+        def _backward():
+            self.grad += s * (1 - s) * out.grad
+        out._backward = _backward
+        return out
+
+    def relu(self):
+        out = Value(max(0, self.data), (self,), 'relu')
+        def _backward():
+            self.grad += (out.grad if self.data > 0 else 0)
+        out._backward = _backward
+        return out
+
+    def exp(self):
+        x = self.data
+        out = Value(math.exp(x), (self,), 'exp')
+        def _backward():
+            self.grad += out.data * out.grad
+        out._backward = _backward
+        return out
+
+    def log(self):
+        x = self.data
+        # 加上极小值防止 log(0)
+        out = Value(math.log(x + 1e-12), (self,), 'log')
+        def _backward():
+            self.grad += (1 / (x + 1e-12)) * out.grad
+        out._backward = _backward
+        return out
+
+    # ============ 反向传播 ============
+    def backward(self):
+        # 拓扑排序
+        topo = []
+        visited = set()
+        def build_topo(v):
+            if v not in visited:
+                visited.add(v)
+                for child in v._prev:
+                    build_topo(child)
+                topo.append(v)
+        build_topo(self)
+
+        # 反向传播
+        self.grad = 1.0
+        for node in reversed(topo):
+            node._backward()
+
+# ============ 测试：神经网络中的一步 ============
+# 模拟一个小神经元：y = tanh(w1*x1 + w2*x2 + b)
+
+x1 = Value(2.0); x1.label = 'x1'
+x2 = Value(-1.0); x2.label = 'x2'
+w1 = Value(0.5); w1.label = 'w1'
+w2 = Value(-0.3); w2.label = 'w2'
+b = Value(0.1); b.label = 'b'
+
+z = w1 * x1 + w2 * x2 + b
+z.label = 'z'
+y = z.tanh()
+y.label = 'y'
+
+y.backward()
+
+print(f"y = {y.data:.4f}")
+print(f"dy/dw1 = {w1.grad:.4f}  (解析：x1*(1-tanh(z)^2) = {x1.data * (1 - y.data**2):.4f})")
+print(f"dy/dw2 = {w2.grad:.4f}  (解析：x2*(1-tanh(z)^2) = {x2.data * (1 - y.data**2):.4f})")
+print(f"dy/db  = {b.grad:.4f}  (解析：(1-tanh(z)^2)        = {1 - y.data**2:.4f})")
+```
+
+### 用 Value 类搭建迷你神经网络
+
+```python
+import random
+
+class Neuron:
+    def __init__(self, n_in):
+        self.w = [Value(random.uniform(-1, 1)) for _ in range(n_in)]
+        self.b = Value(0.0)
+
+    def __call__(self, x):
+        # y = sum(w_i * x_i) + b
+        act = sum((wi * xi for wi, xi in zip(self.w, x)), self.b)
+        return act.tanh()
+
+    def parameters(self):
+        return self.w + [self.b]
+
+class Layer:
+    def __init__(self, n_in, n_out):
+        self.neurons = [Neuron(n_in) for _ in range(n_out)]
+
+    def __call__(self, x):
+        return [n(x) for n in self.neurons]
+
+    def parameters(self):
+        return [p for n in self.neurons for p in n.parameters()]
+
+class MLP:
+    def __init__(self, n_in, layer_sizes):
+        sizes = [n_in] + layer_sizes
+        self.layers = [Layer(sizes[i], sizes[i+1]) for i in range(len(layer_sizes))]
+
+    def __call__(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x[0] if len(x) == 1 else x
+
+    def parameters(self):
+        return [p for layer in self.layers for p in layer.parameters()]
+
+# ============ XOR 训练 ============
+np_random = random.Random(42)
+X = [[Value(x1), Value(x2)] for x1, x2 in [(0,0),(0,1),(1,0),(1,1)]]
+y_true = [0, 1, 1, 0]
+
+model = MLP(n_in=2, layer_sizes=[4, 4, 1])
+print(f"参数总数: {len(model.parameters())}")
+
+lr = 0.05
+for epoch in range(200):
+    # 前向
+    y_pred = [model(x) for x in X]
+    # 损失（MSE）
+    loss = sum((yp - yt)**2 for yp, yt in zip(y_pred, y_true))
+
+    # 清零梯度
+    for p in model.parameters():
+        p.grad = 0.0
+
+    # 反向
+    loss.backward()
+
+    # 更新
+    for p in model.parameters():
+        p.data -= lr * p.grad
+
+    if epoch % 20 == 0:
+        print(f"epoch {epoch:3d}: loss = {loss.data:.4f}")
+
+# 验证
+print("\n预测结果:")
+for xi, yi in zip(X, y_true):
+    pred = model(xi).data
+    print(f"  x=({xi[0].data:.0f},{xi[1].data:.0f}) -> y_pred={pred:.3f} (真实={yi})")
+```
+
+完整运行后你会看到 XOR 问题的损失从初始的较大值下降到接近 0，最终预测接近真实标签。
+
+### 验证：与 PyTorch 对比
+
+```python
+import torch
+
+# 把上面的 Value 类自动微分结果与 PyTorch 对比
+x = torch.tensor([2.0, -1.0], requires_grad=True)
+w = torch.tensor([0.5, -0.3], requires_grad=True)
+b = torch.tensor([0.1], requires_grad=True)
+
+z = (w * x).sum() + b
+y = torch.tanh(z)
+y.backward()
+
+print(f"PyTorch: dw = {w.grad}, db = {b.grad.item():.4f}")
+print(f"Value:   dw = {[wi.grad for wi in [Value(0.5)*Value(2.0)]]}")  # 简化输出
+```
+
+两个引擎给出的梯度应该完全一致（到 6-7 位小数），证明我们的 `Value` 实现等价于 PyTorch 的 `torch.autograd` 在标量情况下的反向模式 AD。
+
+---
+
+## 进一步阅读
+
+1. **Rumelhart, D. E., Hinton, G. E., & Williams, R. J. (1986).** *Learning representations by back-propagating errors.* Nature. — 反向传播的经典论文。
+2. **Baydin, A. G., Pearlmutter, B. A., Radul, A. A., & Siskind, J. M. (2018).** *Automatic differentiation in machine learning: a survey.* JMLR. arXiv:1502.05767 — 自动微分的综述（含前向/反向模式对比）。
+3. **Griewank, A., & Walther, A. (2008).** *Evaluating Derivatives: Principles and Techniques of Algorithmic Differentiation.* — AD 理论的经典教材。
+4. **Pascanu, R., Mikolov, T., & Bengio, Y. (2013).** *On the difficulty of training recurrent neural networks.* ICML. — 用雅可比谱分析梯度消失/爆炸。
+5. **Karpathy, A. (2015).** *Yes you should understand backprop.* — 直观解释反向传播，强烈推荐。
+6. **PyTorch Documentation: Autograd Mechanics.** — 工业级反向模式 AD 的实现细节。
+7. **Goodfellow, I., Bengio, Y., & Courville, A. (2016).** *Deep Learning*, Chapter 6.4 — 反向传播的更多推导细节。
+8. **Numerical stability tricks:** *Stanford CS231n Notes on Backprop.* — 实用的数值稳定性总结。
+
+---
+
+## 小结
+
+| 概念 | 说明 |
+|------|------|
+| 链式法则 | 复合函数求导的核心工具 |
+| 计算图 | 将计算过程可视化为图结构 |
+| 前向传播 | 从左到右计算输出 |
+| 反向传播 | 从右到左计算梯度 |
+| 反向模式 AD | 神经网络训练的事实标准 |
+| 数值稳定性 | log-sum-exp 等技巧避免溢出 |
+| 自动微分 | 框架自动计算梯度，无需手动推导 |
+
+## 练习
+
+1. 手动推导一个 2-3-1 神经网络的反向传播公式。
+
+2. 实现完整的反向传播算法，用梯度检查验证正确性。
+
+3. 比较手动实现和 PyTorch 自动微分的结果，确保一致。
+
+4. 分析梯度消失问题：用 Sigmoid 激活函数训练深层网络，观察梯度变化。

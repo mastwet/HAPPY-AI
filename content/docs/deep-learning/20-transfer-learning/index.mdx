@@ -1,0 +1,339 @@
+---
+title: 20 迁移学习
+description: 预训练模型、微调、特征提取
+---
+
+# 20 迁移学习
+
+迁移学习（Transfer Learning）利用预训练模型的知识，快速解决新任务，是深度学习中最实用的技术之一。
+
+## 为什么需要迁移学习
+
+### 问题
+
+- 数据不足：标注数据昂贵且耗时
+- 训练时间长：从零训练大模型需要数天甚至数周
+- 计算资源大：需要大量 GPU
+
+### 人类学习的启发
+
+迁移学习的思想来源于人类的学习方式：
+
+- 学会骑自行车后，学骑摩托车会更快
+- 学会英语后，学法语会比从零开始容易
+- 擅长围棋的人，学象棋也会有一定优势
+
+**核心思想**：知识可以跨任务、跨领域迁移。
+
+### 解决方案
+
+利用在大数据集（如 ImageNet）上预训练的模型，迁移到目标任务：
+
+```
+预训练模型（ImageNet） → 目标任务（你的数据）
+     1000 个类别              10 个类别
+     100 万张图片             1000 张图片
+```
+
+## 迁移学习的类型
+
+| 类型 | 描述 | 例子 |
+|------|------|------|
+| **归纳迁移** | 源任务和目标任务不同 | 用ImageNet预训练模型做医疗图像分类 |
+| **直推迁移** | 源域和目标域不同，任务相同 | 用白天场景数据训练夜间场景检测 |
+| **无监督迁移** | 目标任务没有标注数据 | 用有标签数据训练无标签数据的表示 |
+
+## 迁移学习策略
+
+### 1. 特征提取（Feature Extraction）
+
+冻结预训练模型的所有层，只训练最后的分类层：
+
+```python
+import torch
+import torch.nn as nn
+import torchvision.models as models
+
+# 加载预训练模型
+model = models.resnet18(pretrained=True)
+
+# 冻结所有层
+for param in model.parameters():
+    param.requires_grad = False
+
+# 替换最后的分类层
+num_features = model.fc.in_features
+model.fc = nn.Linear(num_features, num_classes)
+
+# 只训练最后的分类层
+optimizer = torch.optim.Adam(model.fc.parameters(), lr=0.001)
+```
+
+### 2. 微调（Fine-tuning）
+
+解冻部分层，用较小的学习率训练：
+
+```python
+# 加载预训练模型
+model = models.resnet18(pretrained=True)
+
+# 替换分类层
+num_features = model.fc.in_features
+model.fc = nn.Linear(num_features, num_classes)
+
+# 分层学习率
+optimizer = torch.optim.Adam([
+    {'params': model.layer1.parameters(), 'lr': 1e-5},
+    {'params': model.layer2.parameters(), 'lr': 1e-5},
+    {'params': model.layer3.parameters(), 'lr': 1e-4},
+    {'params': model.layer4.parameters(), 'lr': 1e-4},
+    {'params': model.fc.parameters(), 'lr': 1e-3},
+])
+```
+
+### 3. 逐层解冻
+
+从顶层开始逐层解冻：
+
+```python
+# 先训练分类层
+for param in model.parameters():
+    param.requires_grad = False
+model.fc.requires_grad = True
+
+train(model, epochs=5)
+
+# 解冻 layer4
+for param in model.layer4.parameters():
+    param.requires_grad = True
+
+train(model, epochs=5)
+
+# 解冻 layer3
+for param in model.layer3.parameters():
+    param.requires_grad = True
+
+train(model, epochs=5)
+```
+
+## 常用预训练模型
+
+### 图像分类
+
+| 模型 | 参数量 | ImageNet Top-1 | 特点 |
+|------|--------|---------------|------|
+| ResNet-18 | 11M | 69.8% | 轻量，适合小数据集 |
+| ResNet-50 | 25M | 76.1% | 平衡 |
+| ResNet-101 | 45M | 77.4% | 更深 |
+| VGG-16 | 138M | 71.5% | 经典 |
+| EfficientNet-B0 | 5.3M | 77.1% | 高效 |
+| EfficientNet-B7 | 66M | 84.3% | 高精度 |
+
+```python
+# 加载不同模型
+model = models.resnet50(pretrained=True)
+model = models.vgg16(pretrained=True)
+model = models.efficientnet_b0(pretrained=True)
+```
+
+### NLP 预训练模型
+
+| 模型 | 参数量 | 特点 |
+|------|--------|------|
+| BERT | 110M-340M | 双向编码，理解上下文 |
+| GPT-2 | 117M-1.5B | 生成式，自回归 |
+| RoBERTa | 125M-355M | BERT 的优化版 |
+| DistilBERT | 66M | BERT 的蒸馏版，更快 |
+
+```python
+from transformers import BertModel, BertTokenizer
+
+# 加载 BERT
+model = BertModel.from_pretrained('bert-base-uncased')
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+# 编码文本
+text = "Hello, world!"
+inputs = tokenizer(text, return_tensors='pt')
+outputs = model(**inputs)
+```
+
+## 完整示例：图像分类
+
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader
+from torchvision import datasets, transforms, models
+
+# 设备
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# 数据预处理
+train_transform = transforms.Compose([
+    transforms.RandomResizedCrop(224),
+    transforms.RandomHorizontalFlip(),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
+test_transform = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+])
+
+# 加载数据（假设有自定义数据集）
+train_dataset = datasets.ImageFolder('data/train', transform=train_transform)
+test_dataset = datasets.ImageFolder('data/test', transform=test_transform)
+
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+
+num_classes = len(train_dataset.classes)
+
+# 加载预训练模型
+model = models.resnet50(pretrained=True)
+
+# 冻结特征提取层
+for param in model.parameters():
+    param.requires_grad = False
+
+# 替换分类层
+num_features = model.fc.in_features
+model.fc = nn.Sequential(
+    nn.Linear(num_features, 256),
+    nn.ReLU(),
+    nn.Dropout(0.5),
+    nn.Linear(256, num_classes)
+)
+
+model = model.to(device)
+
+# 损失函数和优化器
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.fc.parameters(), lr=0.001)
+
+# 学习率调度
+scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
+
+# 训练
+num_epochs = 10
+for epoch in range(num_epochs):
+    model.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    
+    for inputs, labels in train_loader:
+        inputs, labels = inputs.to(device), labels.to(device)
+        
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        
+        running_loss += loss.item()
+        _, predicted = outputs.max(1)
+        total += labels.size(0)
+        correct += predicted.eq(labels).sum().item()
+    
+    epoch_loss = running_loss / len(train_loader)
+    epoch_acc = 100. * correct / total
+    print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.2f}%')
+    
+    scheduler.step()
+
+# 评估
+model.eval()
+correct = 0
+total = 0
+
+with torch.no_grad():
+    for inputs, labels in test_loader:
+        inputs, labels = inputs.to(device), labels.to(device)
+        outputs = model(inputs)
+        _, predicted = outputs.max(1)
+        total += labels.size(0)
+        correct += predicted.eq(labels).sum().item()
+
+print(f'Test Accuracy: {100. * correct / total:.2f}%')
+
+# 保存模型
+torch.save(model.state_dict(), 'transfer_model.pth')
+```
+
+## 微调策略
+
+### 何时微调
+
+| 场景 | 策略 |
+|------|------|
+| 数据很少（&lt;1000） | 特征提取，只训练分类层 |
+| 数据中等（1000-10000） | 微调顶层几层 |
+| 数据充足（>10000） | 微调全部层 |
+| 数据与预训练数据相似 | 特征提取 |
+| 数据与预训练数据不同 | 微调更多层 |
+
+### 学习率设置
+
+```python
+# 分层学习率
+optimizer = optim.SGD([
+    {'params': model.layer1.parameters(), 'lr': 1e-5},
+    {'params': model.layer2.parameters(), 'lr': 1e-5},
+    {'params': model.layer3.parameters(), 'lr': 1e-4},
+    {'params': model.layer4.parameters(), 'lr': 1e-4},
+    {'params': model.fc.parameters(), 'lr': 1e-3},
+], momentum=0.9)
+```
+
+## 领域自适应
+
+### 问题
+
+源域和目标域数据分布不同：
+
+```
+源域（ImageNet）：照片风格
+目标域（医学图像）：X光片风格
+```
+
+### 解决方案
+
+**批量归一化自适应**：
+
+```python
+class AdaptiveBN(nn.Module):
+    def __init__(self, num_features):
+        super().__init__()
+        self.bn_source = nn.BatchNorm2d(num_features)
+        self.bn_target = nn.BatchNorm2d(num_features)
+    
+    def forward(self, x, domain='source'):
+        if domain == 'source':
+            return self.bn_source(x)
+        else:
+            return self.bn_target(x)
+```
+
+## 小结
+
+| 策略 | 适用场景 | 优点 | 缺点 |
+|------|---------|------|------|
+| 特征提取 | 小数据集 | 快速，防过拟合 | 可能欠拟合 |
+| 微调 | 中等数据集 | 更好的性能 | 需要调参 |
+| 逐层解冻 | 大数据集 | 最佳性能 | 训练时间长 |
+
+## 练习
+
+1. 使用预训练的 ResNet-18，在 CIFAR-10 上进行迁移学习，比较特征提取和微调的效果。
+
+2. 尝试不同的学习率策略（固定、分层、预热），观察对微调效果的影响。
+
+3. 可视化预训练模型不同层学到的特征，观察从底层到高层的特征变化。
+
+4. 尝试加载不同的预训练模型（ResNet、VGG、EfficientNet），比较在相同任务上的性能。

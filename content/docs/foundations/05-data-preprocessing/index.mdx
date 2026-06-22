@@ -1,0 +1,302 @@
+---
+title: 05 数据预处理
+description: 数据清洗、特征工程、标准化
+---
+
+# 05 数据预处理
+
+数据预处理是机器学习中最重要也最耗时的环节。业界常说："Garbage in, garbage out"——数据质量直接决定模型上限。
+
+## 为什么数据预处理如此重要
+
+### 数据质量问题
+
+真实世界的数据往往存在各种问题：
+
+| 问题 | 描述 | 影响 |
+|------|------|------|
+| **缺失值** | 部分数据缺失 | 模型无法训练或结果偏差 |
+| **异常值** | 明显偏离正常范围的数据 | 影响模型参数估计 |
+| **重复数据** | 相同记录出现多次 | 导致过拟合 |
+| **不一致** | 同一信息多种表示 | 模型学习到错误模式 |
+| **量纲差异** | 不同特征数值范围差异大 | 梯度下降收敛慢 |
+
+### 数据预处理的流程
+
+```
+原始数据 → 数据清洗 → 特征工程 → 特征缩放 → 数据集划分 → 模型训练
+```
+
+**时间占比**：在真实项目中，数据预处理通常占用 **60-80%** 的时间。
+
+## 数据清洗
+
+### 处理缺失值
+
+```python
+import numpy as np
+import pandas as pd
+
+# 创建示例数据
+data = pd.DataFrame({
+    'age': [25, 30, np.nan, 35, 40],
+    'salary': [5000, np.nan, 6000, 7000, 5500],
+    'city': ['Beijing', 'Shanghai', 'Beijing', np.nan, 'Shanghai']
+})
+
+print(data)
+#    age  salary      city
+# 0  25.0  5000.0   Beijing
+# 1  30.0     NaN  Shanghai
+# 2   NaN  6000.0   Beijing
+# 3  35.0  7000.0       NaN
+# 4  40.0  5500.0  Shanghai
+
+# 查看缺失值
+print(data.isnull().sum())
+# age       1
+# salary    1
+# city      1
+```
+
+**处理方法**：
+
+| 方法 | 适用场景 | 代码 |
+|------|---------|------|
+| 删除行 | 缺失值很少 | `data.dropna()` |
+| 均值填充 | 数值型，分布均匀 | `data['age'].fillna(data['age'].mean())` |
+| 中位数填充 | 数值型，有异常值 | `data['age'].fillna(data['age'].median())` |
+| 众数填充 | 类别型 | `data['city'].fillna(data['city'].mode()[0])` |
+| 前向填充 | 时间序列 | `data.fillna(method='ffill')` |
+
+```python
+# 数值型：用均值填充
+data['age'] = data['age'].fillna(data['age'].mean())
+data['salary'] = data['salary'].fillna(data['salary'].median())
+
+# 类别型：用众数填充
+data['city'] = data['city'].fillna(data['city'].mode()[0])
+
+print(data)
+```
+
+### 处理异常值
+
+**箱线图法（IQR）**：
+
+```python
+import numpy as np
+
+# 生成含异常值的数据
+data = np.array([10, 12, 14, 15, 100, 13, 11, 12, 15, 200])
+
+# 计算 IQR
+Q1 = np.percentile(data, 25)
+Q3 = np.percentile(data, 75)
+IQR = Q3 - Q1
+
+# 异常值边界
+lower_bound = Q1 - 1.5 * IQR
+upper_bound = Q3 + 1.5 * IQR
+
+# 识别异常值
+outliers = data[(data < lower_bound) | (data > upper_bound)]
+normal = data[(data >= lower_bound) & (data <= upper_bound)]
+
+print(f"正常值: {normal}")
+print(f"异常值: {outliers}")
+```
+
+**Z-score 法**：
+
+```python
+from scipy import stats
+
+z_scores = np.abs(stats.zscore(data))
+# 通常 |z| > 3 认为是异常值
+normal = data[z_scores < 3]
+outliers = data[z_scores >= 3]
+```
+
+### 处理重复值
+
+```python
+# 删除重复行
+data = data.drop_duplicates()
+
+# 基于特定列删除重复
+data = data.drop_duplicates(subset=['age', 'city'])
+```
+
+## 特征工程
+
+### 特征编码
+
+**独热编码（One-Hot Encoding）**：
+
+```python
+import pandas as pd
+
+# 类别型特征
+data = pd.DataFrame({
+    'color': ['red', 'blue', 'green', 'red', 'blue']
+})
+
+# 独热编码
+encoded = pd.get_dummies(data['color'], prefix='color')
+print(encoded)
+#    color_blue  color_green  color_red
+# 0           0            0          1
+# 1           1            0          0
+# 2           0            1          0
+# 3           0            0          1
+# 4           1            0          0
+```
+
+**标签编码（Label Encoding）**：
+
+```python
+from sklearn.preprocessing import LabelEncoder
+
+le = LabelEncoder()
+data['color_encoded'] = le.fit_transform(data['color'])
+# red=2, blue=0, green=1
+```
+
+> 注意：标签编码会引入大小关系（如 blue < green < red），仅适用于有序类别。
+
+### 特征缩放
+
+**标准化（Standardization / Z-score）**：
+
+$$x' = \frac{x - \mu}{\sigma}$$
+
+```python
+from sklearn.preprocessing import StandardScaler
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# 结果：均值为0，标准差为1
+```
+
+**归一化（Normalization / Min-Max）**：
+
+$$x' = \frac{x - x_{min}}{x_{max} - x_{min}}$$
+
+```python
+from sklearn.preprocessing import MinMaxScaler
+
+scaler = MinMaxScaler()
+X_normalized = scaler.fit_transform(X)
+
+# 结果：缩放到 [0, 1] 范围
+```
+
+**何时用哪种？**
+
+| 方法 | 适用场景 |
+|------|---------|
+| 标准化 | 数据近似正态分布；算法对异常值敏感（如 SVM、神经网络） |
+| 归一化 | 数据范围差异大；需要固定范围（如图像像素 [0, 255]） |
+
+### 特征选择
+
+**方差阈值**：删除方差过小的特征
+
+```python
+from sklearn.feature_selection import VarianceThreshold
+
+selector = VarianceThreshold(threshold=0.01)
+X_selected = selector.fit_transform(X)
+```
+
+**相关性分析**：删除与目标变量相关性低的特征
+
+```python
+import pandas as pd
+
+# 计算相关系数
+correlation = data.corr()
+print(correlation['target'].sort_values(ascending=False))
+```
+
+## 数据集划分
+
+```python
+from sklearn.model_selection import train_test_split
+
+# 划分训练集和测试集（通常 80%/20%）
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
+)
+
+# 进一步划分验证集
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train, y_train, test_size=0.25, random_state=42
+)
+# 最终比例：60% 训练 / 20% 验证 / 20% 测试
+```
+
+## 完整示例
+
+```python
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
+
+# 1. 加载数据
+data = pd.read_csv('data.csv')
+
+# 2. 处理缺失值
+# 数值型用均值填充
+data['age'] = data['age'].fillna(data['age'].mean())
+# 类别型用众数填充
+data['city'] = data['city'].fillna(data['city'].mode()[0])
+
+# 3. 处理异常值（IQR 法）
+Q1 = data['salary'].quantile(0.25)
+Q3 = data['salary'].quantile(0.75)
+IQR = Q3 - Q1
+lower = Q1 - 1.5 * IQR
+upper = Q3 + 1.5 * IQR
+data = data[(data['salary'] >= lower) & (data['salary'] <= upper)]
+
+# 4. 特征编码
+data = pd.get_dummies(data, columns=['city'], drop_first=True)
+
+# 5. 分离特征和标签
+X = data.drop('target', axis=1)
+y = data['target']
+
+# 6. 特征缩放
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# 7. 数据集划分
+X_train, X_test, y_train, y_test = train_test_split(
+    X_scaled, y, test_size=0.2, random_state=42
+)
+
+print(f"训练集大小: {X_train.shape}")
+print(f"测试集大小: {X_test.shape}")
+```
+
+## 小结
+
+| 步骤 | 操作 | 工具 |
+|------|------|------|
+| 数据清洗 | 缺失值、异常值、重复值 | pandas, scipy |
+| 特征编码 | 独热编码、标签编码 | pandas, sklearn |
+| 特征缩放 | 标准化、归一化 | sklearn |
+| 特征选择 | 方差阈值、相关性分析 | sklearn |
+| 数据集划分 | 训练/验证/测试集 | sklearn |
+
+## 练习
+
+1. 创建一个包含缺失值和异常值的 DataFrame，练习完整的数据清洗流程。
+
+2. 比较标准化和归一化对同一组数据的影响，用可视化展示结果。
+
+3. 对 iris 数据集进行完整预处理：加载数据、处理缺失值、编码标签、标准化特征、划分数据集。

@@ -1,0 +1,370 @@
+---
+title: 14 卷积神经网络 CNN
+description: 卷积、池化、经典网络架构
+---
+
+# 14 卷积神经网络 CNN
+
+卷积神经网络（Convolutional Neural Network, CNN）是计算机视觉的核心技术，在图像分类、目标检测、语义分割等任务中表现出色。
+
+## 为什么需要 CNN
+
+### 全连接网络的局限
+
+对于 28×28 的图像：
+- 输入维度：784
+- 如果第一层有 1000 个神经元：784,000 个参数
+- 对于 224×224 的图像：50,176,000 个参数
+
+**参数爆炸**，且忽略了图像的空间结构。
+
+### 图像的局部相关性
+
+图像有一个重要特性：**相邻像素之间高度相关**，而远距离像素之间相关性较弱。
+
+```
+像素相关性：
+┌─────────────────┐
+│ 强 强 强 弱 弱 弱 │
+│ 强 强 强 弱 弱 弱 │
+│ 强 强 强 弱 弱 弱 │
+│ 弱 弱 弱 弱 弱 弱 │
+│ 弱 弱 弱 弱 弱 弱 │
+└─────────────────┘
+```
+
+### CNN 的优势
+
+1. **局部连接**：每个神经元只连接局部区域
+2. **权重共享**：同一卷积核在整个图像上滑动
+3. **平移不变性**：物体位置变化不影响识别
+4. **层次特征提取**：底层提取边缘，高层提取复杂模式
+
+## 卷积操作
+
+### 一维卷积
+
+```
+输入:  [1, 2, 3, 4, 5]
+卷积核: [1, 0, -1]
+
+输出:  [1*1+2*0+3*(-1), 2*1+3*0+4*(-1), ...]
+      = [-2, -2, -2]
+```
+
+```python
+import numpy as np
+
+def conv1d(input, kernel):
+    n = len(input)
+    k = len(kernel)
+    output = []
+    
+    for i in range(n - k + 1):
+        output.append(np.sum(input[i:i+k] * kernel))
+    
+    return np.array(output)
+
+# 测试
+input = np.array([1, 2, 3, 4, 5])
+kernel = np.array([1, 0, -1])
+print(conv1d(input, kernel))  # [-2 -2 -2]
+```
+
+### 二维卷积
+
+```python
+def conv2d(input, kernel):
+    """简化版 2D 卷积"""
+    h, w = input.shape
+    kh, kw = kernel.shape
+    
+    output_h = h - kh + 1
+    output_w = w - kw + 1
+    output = np.zeros((output_h, output_w))
+    
+    for i in range(output_h):
+        for j in range(output_w):
+            output[i, j] = np.sum(input[i:i+kh, j:j+kw] * kernel)
+    
+    return output
+
+# 测试
+input = np.array([[1, 2, 3],
+                  [4, 5, 6],
+                  [7, 8, 9]])
+
+kernel = np.array([[1, 0],
+                   [0, -1]])
+
+print(conv2d(input, kernel))
+# [[-4 -4]
+#  [-4 -4]]
+```
+
+
+![网络架构示意](/images/14-network-arch.png)
+
+*网络架构示意*
+
+## 卷积层
+
+### 关键参数
+
+| 参数 | 含义 | 常用值 |
+|------|------|--------|
+| Kernel Size | 卷积核大小 | 3×3, 5×5, 7×7 |
+| Stride | 步长 | 1, 2 |
+| Padding | 填充 | Same, Valid |
+| Channels | 通道数 | 3 (RGB), 64, 128, 256 |
+
+### Padding
+
+**Valid**：不填充
+```
+输入: 5×5, 卷积核: 3×3, 步长: 1
+输出: (5-3+1) × (5-3+1) = 3×3
+```n
+**Same**：填充使输出尺寸与输入相同
+```
+输出尺寸 = 输入尺寸
+Padding = (Kernel Size - 1) / 2
+```
+
+```python
+def conv2d_with_padding(input, kernel, padding=0, stride=1):
+    """带 Padding 和 Stride 的 2D 卷积"""
+    # 添加 Padding
+    if padding > 0:
+        input = np.pad(input, padding, mode='constant')
+    
+    h, w = input.shape
+    kh, kw = kernel.shape
+    
+    # 计算输出尺寸
+    output_h = (h - kh) // stride + 1
+    output_w = (w - kw) // stride + 1
+    
+    output = np.zeros((output_h, output_w))
+    
+    for i in range(output_h):
+        for j in range(output_w):
+            output[i, j] = np.sum(
+                input[i*stride:i*stride+kh, j*stride:j*stride+kw] * kernel
+            )
+    
+    return output
+```
+
+## 池化层
+
+### 最大池化
+
+取窗口内的最大值：
+
+```python
+def max_pool2d(input, pool_size=2, stride=2):
+    h, w = input.shape
+    output_h = (h - pool_size) // stride + 1
+    output_w = (w - pool_size) // stride + 1
+    
+    output = np.zeros((output_h, output_w))
+    
+    for i in range(output_h):
+        for j in range(output_w):
+            output[i, j] = np.max(
+                input[i*stride:i*stride+pool_size, 
+                      j*stride:j*stride+pool_size]
+            )
+    
+    return output
+
+# 测试
+input = np.array([[1, 2, 3, 4],
+                  [5, 6, 7, 8],
+                  [9, 10, 11, 12],
+                  [13, 14, 15, 16]])
+
+print(max_pool2d(input, pool_size=2, stride=2))
+# [[ 6  8]
+#  [14 16]]
+```
+
+### 平均池化
+
+取窗口内的平均值：
+
+```python
+def avg_pool2d(input, pool_size=2, stride=2):
+    h, w = input.shape
+    output_h = (h - pool_size) // stride + 1
+    output_w = (w - pool_size) // stride + 1
+    
+    output = np.zeros((output_h, output_w))
+    
+    for i in range(output_h):
+        for j in range(output_w):
+            output[i, j] = np.mean(
+                input[i*stride:i*stride+pool_size,
+                      j*stride:j*stride+pool_size]
+            )
+    
+    return output
+```
+
+## 经典 CNN 架构
+
+### LeNet-5（1998）
+
+最早的 CNN 架构之一：
+
+```
+输入 (32×32×1)
+  → Conv (5×5, 6 filters) → 28×28×6
+  → MaxPool (2×2) → 14×14×6
+  → Conv (5×5, 16 filters) → 10×10×16
+  → MaxPool (2×2) → 5×5×16
+  → FC (120) → FC (84) → 输出 (10)
+```
+
+### AlexNet（2012）
+
+深度学习爆发的起点：
+
+```
+输入 (224×224×3)
+  → Conv (11×11, 96, stride=4) → MaxPool
+  → Conv (5×5, 256) → MaxPool
+  → Conv (3×3, 384) → Conv (3×3, 384) → Conv (3×3, 256) → MaxPool
+  → FC (4096) → FC (4096) → 输出 (1000)
+```
+
+创新点：
+- ReLU 激活函数
+- Dropout 正则化
+- GPU 并行训练
+
+### VGGNet（2014）
+
+核心思想：**用多个小卷积核替代大卷积核**
+
+```
+VGG-16:
+输入 (224×224×3)
+  → Conv3-64 → Conv3-64 → MaxPool
+  → Conv3-128 → Conv3-128 → MaxPool
+  → Conv3-256 ×3 → MaxPool
+  → Conv3-512 ×3 → MaxPool
+  → Conv3-512 ×3 → MaxPool
+  → FC-4096 → FC-4096 → 输出 (1000)
+```
+
+两个 3×3 卷积核的感受野 = 一个 5×5 卷积核
+三个 3×3 卷积核的感受野 = 一个 7×7 卷积核
+
+### ResNet（2015）
+
+核心创新：**残差连接（Residual Connection）**
+
+$$\mathbf{y} = F(\mathbf{x}) + \mathbf{x}$$
+
+解决深层网络的梯度消失问题。
+
+```python
+import torch
+import torch.nn as nn
+
+class ResidualBlock(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+        self.conv2 = nn.Conv2d(channels, channels, 3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+    
+    def forward(self, x):
+        residual = x
+        
+        out = self.conv1(x)
+        out = self.bn1(out)
+        out = torch.relu(out)
+        
+        out = self.conv2(out)
+        out = self.bn2(out)
+        
+        out += residual  # 残差连接
+        out = torch.relu(out)
+        
+        return out
+```
+
+## 使用 PyTorch 实现 CNN
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class CNN(nn.Module):
+    def __init__(self, num_classes=10):
+        super(CNN, self).__init__()
+        
+        # 卷积层
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(64, 128, kernel_size=3, padding=1)
+        
+        # 池化层
+        self.pool = nn.MaxPool2d(2, 2)
+        
+        # 全连接层
+        self.fc1 = nn.Linear(128 * 3 * 3, 256)
+        self.fc2 = nn.Linear(256, num_classes)
+        
+        # Dropout
+        self.dropout = nn.Dropout(0.5)
+    
+    def forward(self, x):
+        # Conv + ReLU + Pool
+        x = self.pool(F.relu(self.conv1(x)))  # 28x28 -> 14x14
+        x = self.pool(F.relu(self.conv2(x)))  # 14x14 -> 7x7
+        x = self.pool(F.relu(self.conv3(x)))  # 7x7 -> 3x3
+        
+        # 展平
+        x = x.view(x.size(0), -1)
+        
+        # FC
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        
+        return x
+
+# 测试
+model = CNN(num_classes=10)
+print(model)
+
+# 测试输入
+x = torch.randn(1, 1, 28, 28)
+output = model(x)
+print(f"输出形状: {output.shape}")
+```
+
+## 小结
+
+| 组件 | 作用 | 效果 |
+|------|------|------|
+| 卷积层 | 提取局部特征 | 减少参数，保持空间结构 |
+| 池化层 | 降采样 | 减少计算，增强平移不变性 |
+| 激活函数 | 引入非线性 | 增强表达能力 |
+| 全连接层 | 分类 | 将特征映射到类别 |
+
+## 练习
+
+1. 实现完整的 2D 卷积（支持 Padding、Stride、多通道）。
+
+2. 比较不同卷积核大小（3×3、5×5、7×7）对模型性能的影响。
+
+3. 实现一个简单的 CNN，在 MNIST 数据集上训练，观察卷积核学到的特征。
+
+4. 分析为什么 ResNet 的残差连接能解决梯度消失问题。

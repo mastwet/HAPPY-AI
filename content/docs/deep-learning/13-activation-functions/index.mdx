@@ -1,0 +1,1000 @@
+---
+title: 13 激活函数
+description: Sigmoid、ReLU、Tanh、Swish
+---
+
+# 13 激活函数
+
+激活函数为神经网络引入非线性，使其能够学习复杂的模式。选择合适的激活函数对模型性能至关重要。
+
+## 为什么需要激活函数
+
+### 线性模型的局限
+
+没有激活函数，多层网络等价于单层线性变换：
+
+$$\mathbf{W}_2(\mathbf{W}_1\mathbf{x}) = (\mathbf{W}_2\mathbf{W}_1)\mathbf{x} = \mathbf{W}'\mathbf{x}$$
+
+无论多少层，最终都是线性的，无法解决非线性问题。
+
+### 激活函数的作用
+
+引入非线性，使网络能够拟合任意复杂函数。
+
+### 激活函数的选择策略
+
+| 场景 | 推荐激活函数 | 原因 |
+|------|-------------|------|
+| **隐藏层** | ReLU | 计算快，缓解梯度消失 |
+| **深层网络** | Leaky ReLU / GELU | 避免神经元死亡 |
+| **输出层（二分类）** | Sigmoid | 输出概率 |
+| **输出层（多分类）** | Softmax | 输出概率分布 |
+| **输出层（回归）** | 无（线性输出） | 输出任意值 |
+| **RNN/LSTM** | Tanh | 输出范围适合 |
+| **Transformer** | GELU | 平滑，训练更稳定 |
+
+### 激活函数的发展历史
+
+| 时间 | 激活函数 | 特点 |
+|------|---------|------|
+| 1943 | 阶跃函数 | 最早，但不可导 |
+| 1960s | Sigmoid | 平滑，但梯度消失 |
+| 1990s | Tanh | 零中心化，但仍梯度消失 |
+| 2010 | ReLU | 简单高效，成为主流 |
+| 2015 | Leaky ReLU | 解决神经元死亡 |
+| 2017 | Swish | 自门控，表现更好 |
+| 2018 | GELU | Transformer 标配 |
+
+## Sigmoid
+
+### 定义
+
+$$\sigma(x) = \frac{1}{1 + e^{-x}}$$
+
+### 特性
+
+- 输出范围：(0, 1)
+- 可导
+- 平滑
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+def sigmoid_derivative(x):
+    s = sigmoid(x)
+    return s * (1 - s)
+
+x = np.linspace(-10, 10, 100)
+
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 2, 1)
+plt.plot(x, sigmoid(x), label='Sigmoid')
+plt.axhline(y=0.5, color='r', linestyle='--', alpha=0.5)
+plt.axvline(x=0, color='r', linestyle='--', alpha=0.5)
+plt.xlabel('x')
+plt.ylabel('σ(x)')
+plt.title('Sigmoid Function')
+plt.legend()
+plt.grid(True)
+
+plt.subplot(1, 2, 2)
+plt.plot(x, sigmoid_derivative(x), label="Sigmoid' (x)")
+plt.xlabel('x')
+plt.ylabel("σ'(x)")
+plt.title('Sigmoid Derivative')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
+```
+
+### 问题
+
+1. **梯度消失**：当 $$|x|$$ 很大时，$$\sigma'(x) \approx 0$$
+2. **输出非零中心化**：输出在 (0, 1)，导致下一层输入总是正的
+3. **计算开销大**：涉及指数运算
+
+## Tanh
+
+### 定义
+
+$$\tanh(x) = \frac{e^x - e^{-x}}{e^x + e^{-x}}$$
+
+### 特性
+
+- 输出范围：(-1, 1)
+- 零中心化
+- 仍有梯度消失问题
+
+```python
+def tanh(x):
+    return np.tanh(x)
+
+def tanh_derivative(x):
+    return 1 - np.tanh(x) ** 2
+
+# 绘制
+x = np.linspace(-10, 10, 100)
+plt.plot(x, tanh(x), label='Tanh')
+plt.plot(x, sigmoid(x), label='Sigmoid', linestyle='--')
+plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
+plt.xlabel('x')
+plt.ylabel('f(x)')
+plt.title('Tanh vs Sigmoid')
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+## ReLU（Rectified Linear Unit）
+
+### 定义
+
+$$\text{ReLU}(x) = \max(0, x)$$
+
+### 特性
+
+- 输出范围：[0, +∞)
+- 计算简单
+- 缓解梯度消失
+
+```python
+def relu(x):
+    return np.maximum(0, x)
+
+def relu_derivative(x):
+    return (x > 0).astype(float)
+
+x = np.linspace(-10, 10, 100)
+
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 2, 1)
+plt.plot(x, relu(x), label='ReLU', linewidth=2)
+plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
+plt.axvline(x=0, color='k', linestyle='-', alpha=0.3)
+plt.xlabel('x')
+plt.ylabel('ReLU(x)')
+plt.title('ReLU Function')
+plt.legend()
+plt.grid(True)
+
+plt.subplot(1, 2, 2)
+plt.plot(x, relu_derivative(x), label="ReLU'", linewidth=2)
+plt.xlabel('x')
+plt.ylabel("ReLU'(x)")
+plt.title('ReLU Derivative')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
+```
+
+### 问题：Dead ReLU
+
+当输入为负时，梯度为0，神经元"死亡"，不再更新。
+
+### 解决方案
+
+**Leaky ReLU**：
+
+$$\text{LeakyReLU}(x) = \begin{cases} x & \text{if } x > 0 \\ \alpha x & \text{if } x \leq 0 \end{cases}$$
+
+```python
+def leaky_relu(x, alpha=0.01):
+    return np.where(x > 0, x, alpha * x)
+
+def leaky_relu_derivative(x, alpha=0.01):
+    return np.where(x > 0, 1, alpha)
+
+x = np.linspace(-10, 10, 100)
+plt.plot(x, leaky_relu(x), label='Leaky ReLU')
+plt.plot(x, relu(x), label='ReLU', linestyle='--')
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+## 其他激活函数
+
+### ELU（Exponential Linear Unit）
+
+$$\text{ELU}(x) = \begin{cases} x & \text{if } x > 0 \\ \alpha(e^x - 1) & \text{if } x \leq 0 \end{cases}$$
+
+```python
+def elu(x, alpha=1.0):
+    return np.where(x > 0, x, alpha * (np.exp(x) - 1))
+```
+
+### Swish
+
+$$\text{Swish}(x) = x \cdot \sigma(x)$$
+
+Google 提出的自门控激活函数：
+
+```python
+def swish(x):
+    return x * sigmoid(x)
+
+x = np.linspace(-10, 10, 100)
+plt.plot(x, swish(x), label='Swish')
+plt.plot(x, relu(x), label='ReLU', linestyle='--')
+plt.legend()
+plt.grid(True)
+plt.show()
+```
+
+### GELU（Gaussian Error Linear Unit）
+
+$$\text{GELU}(x) = x \cdot \Phi(x)$$
+
+其中 $$\Phi(x)$$ 是标准正态分布的累积分布函数。Transformer 中使用。
+
+```python
+from scipy.stats import norm
+
+def gelu(x):
+    return x * norm.cdf(x)
+```
+
+## 激活函数对比
+
+| 激活函数 | 输出范围 | 零中心化 | 梯度消失 | 计算速度 | 推荐使用场景 |
+|---------|---------|---------|---------|---------|-----------|
+| Sigmoid | (0, 1) | 否 | 严重 | 慢 | 输出层（二分类） |
+| Tanh | (-1, 1) | 是 | 严重 | 慢 | 隐藏层（较少用） |
+| ReLU | [0, +∞) | 否 | 缓解 | 快 | 隐藏层（最常用） |
+| Leaky ReLU | (-∞, +∞) | 否 | 缓解 | 快 | 隐藏层 |
+| ELU | (-α, +∞) | 近似 | 缓解 | 中等 | 隐藏层 |
+| Swish | (-∞, +∞) | 否 | 缓解 | 中等 | 隐藏层 |
+| GELU | (-∞, +∞) | 近似 | 缓解 | 中等 | Transformer |
+
+
+![激活函数曲线对比](/images/13-activation-curves.png)
+
+*激活函数曲线对比*
+
+## 选择建议
+
+### 隐藏层
+
+- **默认选择**：ReLU
+- **ReLU 效果不佳**：Leaky ReLU 或 ELU
+- **Transformer 架构**：GELU
+
+### 输出层
+
+- **二分类**：Sigmoid
+- **多分类**：Softmax
+- **回归**：无激活函数（线性输出）
+
+---
+
+## 激活函数选择策略详解
+
+### 决策流程图
+
+```
+开始
+  │
+  ├─ 是输出层？
+  │   ├─ 二分类 → Sigmoid
+  │   ├─ 多分类 → Softmax
+  │   └─ 回归   → 无激活函数
+  │
+  └─ 是隐藏层？
+      ├─ 使用 Transformer/BERT/GPT？
+      │   └─ 是 → GELU
+      │
+      ├─ 网络深度 > 30 层？
+      │   ├─ 是 → Swish 或 Mish
+      │   └─ 否 → 继续判断
+      │
+      ├─ 担心 Dead ReLU？
+      │   ├─ 是 → Leaky ReLU (α=0.01)
+      │   └─ 否 → 继续判断
+      │
+      ├─ 需要零中心化输出？
+      │   ├─ 是 → Tanh 或 ELU
+      │   └─ 否 → 继续判断
+      │
+      └─ 默认选择 → ReLU
+```
+
+### 不同场景的选择建议
+
+| 场景 | 推荐激活函数 | 原因 |
+|------|-------------|------|
+| 通用隐藏层 | ReLU | 计算简单，收敛快，缓解梯度消失 |
+| 深层网络 (>30层) | Swish / Mish | 平滑非单调，避免神经元死亡 |
+| 生成对抗网络 (GAN) | Leaky ReLU | 避免梯度消失，生成器需要负梯度 |
+| 循环神经网络 (RNN/LSTM) | Tanh / Sigmoid | 门控机制需要 (0,1) 或 (-1,1) 输出 |
+| Transformer / BERT | GELU | 平滑可导，训练更稳定 |
+| 自编码器 | ReLU / Sigmoid | 稀疏表示或概率重建 |
+| 强化学习 | ReLU / ELU | 稳定训练，避免梯度消失 |
+
+### 为什么 ReLU 是默认选择？
+
+ReLU 成为深度学习默认激活函数的原因：
+
+1. **计算简单**：仅需比较和取最大值，无需指数运算
+2. **缓解梯度消失**：正区间梯度恒为 1，深层网络也能有效传播梯度
+3. **稀疏激活**：约 50% 的神经元输出为 0，形成稀疏表示，减少过拟合
+4. **收敛更快**：相比 Sigmoid/Tanh，ReLU 使梯度下降收敛速度提升约 6 倍
+
+### 实际代码示例：不同激活函数对比
+
+```python
+import torch
+import torch.nn as nn
+
+class ActivationComparison(nn.Module):
+    def __init__(self, activation='relu'):
+        super().__init__()
+        self.fc1 = nn.Linear(784, 256)
+        self.fc2 = nn.Linear(256, 128)
+        self.fc3 = nn.Linear(128, 10)
+        
+        # 根据选择设置激活函数
+        if activation == 'relu':
+            self.activation = nn.ReLU()
+        elif activation == 'leaky_relu':
+            self.activation = nn.LeakyReLU(0.01)
+        elif activation == 'elu':
+            self.activation = nn.ELU(alpha=1.0)
+        elif activation == 'swish':
+            self.activation = lambda x: x * torch.sigmoid(x)
+        elif activation == 'gelu':
+            self.activation = nn.GELU()
+        else:
+            raise ValueError(f"Unknown activation: {activation}")
+    
+    def forward(self, x):
+        x = self.activation(self.fc1(x))
+        x = self.activation(self.fc2(x))
+        x = self.fc3(x)  # 输出层无激活
+        return x
+
+# 测试不同激活函数
+for act in ['relu', 'leaky_relu', 'elu', 'gelu']:
+    model = ActivationComparison(activation=act)
+    x = torch.randn(32, 784)
+    output = model(x)
+    print(f"{act:12s}: output mean={output.mean():.4f}, std={output.std():.4f}")
+```
+
+## 完整示例
+
+```python
+import numpy as np
+
+class Activation:
+    @staticmethod
+    def relu(x):
+        return np.maximum(0, x)
+    
+    @staticmethod
+    def relu_derivative(x):
+        return (x > 0).astype(float)
+    
+    @staticmethod
+    def sigmoid(x):
+        return 1 / (1 + np.exp(-np.clip(x, -500, 500)))
+    
+    @staticmethod
+    def sigmoid_derivative(x):
+        s = Activation.sigmoid(x)
+        return s * (1 - s)
+    
+    @staticmethod
+    def tanh(x):
+        return np.tanh(x)
+    
+    @staticmethod
+    def tanh_derivative(x):
+        return 1 - np.tanh(x) ** 2
+    
+    @staticmethod
+    def leaky_relu(x, alpha=0.01):
+        return np.where(x > 0, x, alpha * x)
+    
+    @staticmethod
+    def leaky_relu_derivative(x, alpha=0.01):
+        return np.where(x > 0, 1, alpha)
+
+# 测试
+x = np.array([-2, -1, 0, 1, 2])
+
+print("ReLU:", Activation.relu(x))
+print("Sigmoid:", Activation.sigmoid(x))
+print("Tanh:", Activation.tanh(x))
+print("Leaky ReLU:", Activation.leaky_relu(x))
+```
+
+## 死亡 ReLU 的概率分析
+
+之前定性提过 Dead ReLU 问题。本节给一个**严格的概率分析**：在什么条件下神经元会永久死亡？为什么学习率太高会加剧这个现象？
+
+### 什么是"死亡"？
+
+ReLU 神经元 $\sigma(z) = \max(0, z)$ 在 $z < 0$ 时输出 0，梯度也为 0。如果某个神经元**对所有训练样本都进入 $z < 0$ 状态**，那么它的梯度永远为 0，权重永不更新——这就是**永久死亡**。
+
+### 单神经元的死亡概率分析
+
+考虑一个 ReLU 神经元 $z = \mathbf{w}^T \mathbf{x} + b$，输入 $\mathbf{x} \sim \mathcal{N}(0, \sigma_x^2 I)$，$\mathbf{w}$ 初始化为 $\mathcal{N}(0, \sigma_w^2 I)$，$b = 0$。
+
+$z$ 服从正态分布：$z \sim \mathcal{N}(0, \sigma_w^2 \cdot n \cdot \sigma_x^2)$，其中 $n$ 是输入维度。
+
+**死亡条件**：$z < 0$，对应概率 $P(z < 0) = 0.5$（对称分布）。
+
+但这只考虑单个神经元对**单个样本**的状态。要永久死亡，需要对**所有样本**都进入负区间：
+
+$$P(\text{死亡}) = P(z^{(1)} < 0, z^{(2)} < 0, \dots, z^{(m)} < 0)$$
+
+对于独立样本：
+
+$$P(\text{死亡}) = \prod_{i=1}^{m} P(z^{(i)} < 0) = (0.5)^m$$
+
+$m = 1000$ 个样本时，$P = 10^{-301}$——**单神经元初始死亡概率几乎为零**。
+
+### 学习过程中的死亡机制
+
+实际中，神经元死亡发生在**训练过程中**，而不是初始化时。原因有三种：
+
+**1. 偏置漂移（Bias Drift）**：如果学习率过大，更新可能把 $b$ 推得很大负值，使 $z = w^T x + b$ 永远 $< 0$。
+
+**2. 大权重 + 偏置不当**：如果 $w$ 范数大但方向使 $w^T x$ 对所有样本都接近 $-\infty$，ReLU 也会失效。
+
+**3. 数据分布偏移**：训练后期，模型把 $b$ 调到某个值后，数据分布的微小变化可能让所有 $z < 0$。
+
+### 学习率与死亡率的实验
+
+```python
+import torch
+import torch.nn as nn
+import numpy as np
+
+def train_and_count_dead(lr, n_epochs=50, hidden=64):
+    """训练 MLP 并统计死亡神经元比例"""
+    torch.manual_seed(0)
+    model = nn.Sequential(
+        nn.Linear(20, hidden),
+        nn.ReLU(),
+        nn.Linear(hidden, hidden),
+        nn.ReLU(),
+        nn.Linear(hidden, 1)
+    )
+    opt = torch.optim.SGD(model.parameters(), lr=lr)
+
+    X = torch.randn(500, 20)
+    y = torch.randn(500, 1)
+
+    # 训练
+    for _ in range(n_epochs):
+        opt.zero_grad()
+        loss = ((model(X) - y) ** 2).mean()
+        loss.backward()
+        opt.step()
+
+    # 统计死亡神经元：在训练集上始终输出 0
+    with torch.no_grad():
+        h1 = model[:2](X)  # 第一层 ReLU 输出
+        h2 = model[:4](X)  # 第二层 ReLU 输出
+
+    dead1 = (h1.sum(dim=0) == 0).float().mean().item()
+    dead2 = (h2.sum(dim=0) == 0).float().mean().item()
+    return dead1, dead2
+
+print("学习率 vs 神经元死亡率")
+print(f"{'LR':<8} {'Layer1 死亡率':<15} {'Layer2 死亡率'}")
+for lr in [0.001, 0.01, 0.1, 1.0]:
+    d1, d2 = train_and_count_dead(lr)
+    print(f"{lr:<8} {d1:.2%}            {d2:.2%}")
+```
+
+你会看到**学习率越大，死亡率越高**。这是因为大学习率导致权重更新"过冲"，把神经元推出激活区间。
+
+### 缓解死亡 ReLU 的方案
+
+| 方案 | 公式 | 优点 | 缺点 |
+|------|------|------|------|
+| Leaky ReLU | $\max(\alpha x, x)$, $\alpha = 0.01$ | 简单，缓解死亡 | $\alpha$ 是超参 |
+| PReLU | $\alpha$ 可学习 | 自动适应 | 多参数量 |
+| ELU | $\alpha(e^x - 1)$ for $x < 0$ | 零均值输出 | $\exp$ 慢 |
+| GELU/Swish/Mish | 平滑非单调 | 表现好 | 计算稍贵 |
+| 减小学习率 | - | 通用 | 训练慢 |
+| BatchNorm | 归一化输入 | 稳定 | 额外参数 |
+
+经验值：在大多数任务上，**Leaky ReLU + 0.01 的负斜率**是死亡 ReLU 的最简单替代品。如果对性能极敏感，再考虑 GELU/Swish。
+
+---
+
+## 现代激活函数的设计哲学
+
+从 ReLU 到 Swish/GELU/Mish，激活函数的设计经历了三个演化阶段：
+
+### 阶段 1：解决 Sigmoid 的饱和问题 → ReLU
+
+ReLU 的核心洞见：**正区间恒为 1 的导数**，这让梯度在深层网络中也能稳定传播。但 ReLU 放弃了负区间（恒为 0），引入了死亡问题。
+
+### 阶段 2：修复负区间 → Leaky ReLU / ELU
+
+Leaky ReLU 给出**小的负斜率** $\alpha x$；ELU 给出**指数衰减** $\alpha(e^x - 1)$。两者都保留了负区间的小梯度，但牺牲了"零激活"的稀疏性。
+
+### 阶段 3：自门控 / 平滑非单调 → Swish / GELU / Mish
+
+最新一代激活函数有三个共同特征：
+
+1. **平滑（smooth）**：在 0 点可导，无 ReLU 的"尖角"
+2. **非单调（non-monotonic）**：函数值先降后升（Swish）或先降后升再稳（Mish）
+3. **自门控（self-gated）**：$f(x) = x \cdot g(x)$，其中 $g(x)$ 是一个"门控"，控制通过多少 $x$
+
+#### Swish（Ramachandran et al. 2017）
+
+$$\text{Swish}(x) = x \cdot \sigma(\beta x)$$
+
+其中 $\beta$ 是常数（默认 $\beta = 1$，相当于 $\text{SiLU}$）。**设计哲学**：门控函数 $\sigma(\beta x)$ 在 $x$ 为负时给出小但非零的通过率，避免死亡；同时保留 $x$ 为正时的恒等特性。
+
+```python
+import torch
+x = torch.linspace(-3, 3, 100)
+swish = x * torch.sigmoid(x)
+# 注意 Swish 在 x ≈ -1.28 处有最小值（约 -0.278）
+```
+
+#### GELU（Hendrycks & Gimpel 2016）
+
+$$\text{GELU}(x) = x \cdot \Phi(x) = \frac{x}{2}\left(1 + \text{erf}\!\left(\frac{x}{\sqrt{2}}\right)\right)$$
+
+**设计哲学**：$\Phi(x)$ 是标准正态的 CDF，表示"$x$ 来自正态分布的累积概率"——它给出了"$x$ 应该通过多少"的概率性解释，而不是硬开关。
+
+近似实现（避免 $\text{erf}$）：
+
+$$\text{GELU}(x) \approx 0.5 x \left(1 + \tanh\!\left(\sqrt{\frac{2}{\pi}}\left(x + 0.044715 x^{3}\right)\right)\right)$$
+
+这是 PyTorch 默认的 `nn.GELU()` 使用的近似。
+
+#### Mish（Misra 2019）
+
+$$\text{Mish}(x) = x \cdot \tanh(\text{softplus}(x)) = x \cdot \tanh(\ln(1 + e^x))$$
+
+**设计哲学**：相比 Swish 的 $\sigma$，Mish 用 $\tanh(\text{softplus})$，后者在负区间更平滑（有非零的二阶导数）。
+
+### 三者的可视化对比
+
+```python
+import numpy as np
+import matplotlib.pyplot as plt
+
+def gelu(x):
+    return 0.5 * x * (1 + np.tanh(np.sqrt(2/np.pi) * (x + 0.044715 * x**3)))
+
+def mish(x):
+    return x * np.tanh(np.log(1 + np.exp(x)))
+
+def swish(x):
+    return x / (1 + np.exp(-x))
+
+x = np.linspace(-3, 3, 200)
+fig, ax = plt.subplots(figsize=(10, 6))
+ax.plot(x, swish(x), label='Swish')
+ax.plot(x, gelu(x), label='GELU')
+ax.plot(x, mish(x), label='Mish')
+ax.plot(x, np.maximum(0, x), 'k--', label='ReLU', alpha=0.5)
+ax.axhline(0, color='gray', linewidth=0.5)
+ax.axvline(0, color='gray', linewidth=0.5)
+ax.legend(); ax.grid(True)
+ax.set_title('Modern Activation Functions')
+plt.show()
+```
+
+### 为什么 Transformer 选 GELU？
+
+GPT、BERT、ViT 等几乎所有现代 Transformer 都默认用 GELU，三个原因：
+
+1. **概率解释**：$\Phi(x)$ 的语义清晰——"在 $\mathcal{N}(0, 1)$ 分布下，$x$ 大于随机抽样的概率"。这与注意力机制（也是概率加权）天然契合。
+2. **平滑可导**：训练稳定，没有 ReLU 的尖角。
+3. **接近恒等**：$|x|$ 大时 $f(x) \approx x$，避免对输入做大幅缩放。
+
+---
+
+## 激活函数与初始化的耦合
+
+激活函数与初始化**不是独立的**，必须配对使用。
+
+### 方差传递的数学分析
+
+设第 $l$ 层线性输出 $z_i = \sum_j W_{ij} a_j + b_i$，假设：
+- $W_{ij}$ 独立同分布，均值为 0，方差为 $\text{Var}(W)$
+- $a_j$ 独立同分布，均值为 0，方差为 $\text{Var}(a)$
+
+则 $z_i$ 的方差：
+
+$$\text{Var}(z_i) = n_{l-1} \cdot \text{Var}(W) \cdot \text{Var}(a)$$
+
+激活后方差取决于激活函数的性质：
+
+| 激活函数 | $f$ 在 0 附近 | $\text{Var}(f(z))$ 相对 $\text{Var}(z)$ |
+|---------|--------------|-----------------------------------|
+| Identity | $f(z) = z$ | 1.0 |
+| Tanh | $f'(0) = 1$ | $\approx 1$ |
+| Sigmoid | $f'(0) = 0.25$ | $\approx 0.25$ |
+| ReLU | $f(z) = z$ for $z>0$, $0$ otherwise | $0.5$ |
+| Leaky ReLU ($\alpha$) | $\alpha$ for $z<0$ | $0.5(1 + \alpha^2)$ |
+
+要让前向传播时方差稳定，需要：
+
+$$\text{Var}(W) \cdot n_{l-1} \cdot k_{\text{activation}} = 1$$
+
+其中 $k$ 是上表第三列的系数。这就是为什么：
+
+- **Tanh/Sigmoid**：$\text{Var}(W) = 1 / n_{l-1}$（Xavier）
+- **ReLU**：$\text{Var}(W) = 2 / n_{l-1}$（He，方差翻倍补偿 ReLU 砍掉的 50%）
+- **Leaky ReLU**：$\text{Var}(W) = 2 / (n_{l-1} (1 + \alpha^2))$（介于 ReLU 和 Tanh 之间）
+
+### 配对速查表
+
+| 激活函数 | 推荐初始化 | PyTorch 默认 |
+|---------|----------|--------------|
+| Tanh | Xavier/Glorot | `xavier_normal_` |
+| Sigmoid | Xavier/Glorot | `xavier_normal_` |
+| ReLU | He/Kaiming | `kaiming_normal_` |
+| Leaky ReLU | He（带 $\alpha$ 修正） | `kaiming_normal_(nonlinearity='leaky_relu')` |
+| GELU | He | `kaiming_normal_` |
+| Mish/Swish | He | `kaiming_normal_` |
+
+**关键错误**：用 Xavier 初始化训练 ReLU 网络 → 各层方差逐层减半 → 深层网络激活坍缩到 0。这是新手最常犯的错误之一。
+
+### 实验验证
+
+```python
+import torch
+import torch.nn as nn
+
+def build_and_test(init_method, activation, depth=30):
+    """构造深度网络并测试激活方差"""
+    layers = []
+    for i in range(depth):
+        lin = nn.Linear(64, 64)
+        if init_method == 'xavier':
+            nn.init.xavier_normal_(lin.weight)
+        elif init_method == 'he':
+            nn.init.kaiming_normal_(lin.weight, nonlinearity='relu')
+        elif init_method == 'wrong':
+            nn.init.xavier_normal_(lin.weight)  # 错误配对
+        layers.append(lin)
+        if activation == 'relu':
+            layers.append(nn.ReLU())
+        elif activation == 'tanh':
+            layers.append(nn.Tanh())
+    model = nn.Sequential(*layers)
+
+    x = torch.randn(1, 64)
+    stds = []
+    h = x
+    for layer in model:
+        h = layer(h)
+        if isinstance(layer, nn.ReLU):
+            stds.append(h.std().item())
+    return stds
+
+# 测试 1: ReLU + He（正确配对）
+stds = build_and_test('he', 'relu')
+print(f"ReLU + He: layer 1 std = {stds[0]:.4f}, layer 30 std = {stds[-1]:.4f}")
+
+# 测试 2: ReLU + Xavier（错误配对）
+stds = build_and_test('wrong', 'relu')
+print(f"ReLU + Xavier: layer 1 std = {stds[0]:.4f}, layer 30 std = {stds[-1]:.6f}")
+```
+
+预期：
+- 正确配对：每层激活方差保持稳定
+- 错误配对：30 层后方差衰减到接近 0
+
+---
+
+## 多维权衡：饱和性 / 计算成本 / 输出分布
+
+实际选激活函数时，要平衡**至少五个维度**：
+
+### 维度 1：饱和性（Saturability）
+
+**饱和**指激活函数在输入很大或很小时，输出趋近于常数，梯度消失。
+
+| 激活函数 | 是否饱和 | 严重程度 |
+|---------|---------|---------|
+| ReLU | 单边饱和（负半轴） | 轻微（正区间无饱和） |
+| Leaky ReLU | 不饱和 | 无 |
+| Sigmoid | 双边饱和 | 严重 |
+| Tanh | 双边饱和 | 中等 |
+| GELU/Swish/Mish | 不饱和 | 无 |
+
+### 维度 2：计算成本
+
+| 激活函数 | FLOPs | 备注 |
+|---------|-------|------|
+| ReLU | 1 次比较 | 最快 |
+| Leaky ReLU | 1 次比较 + 1 次乘法 | 略贵 |
+| Tanh/Sigmoid | 1 次指数 | 中等 |
+| GELU | 1 erf / 1 tanh | 较贵（可近似） |
+| Swish | 1 sigmoid + 1 乘法 | 中等 |
+| Mish | 1 exp + 1 log + 1 tanh | 最贵 |
+
+在 GPU 上差异会被批处理均摊，但在大规模训练中仍可观。
+
+### 维度 3：输出分布
+
+| 激活函数 | 输出范围 | 均值 | 零中心化 |
+|---------|---------|------|---------|
+| ReLU | $[0, +\infty)$ | $\gt 0$ | 否 |
+| Leaky ReLU | $(-\infty, +\infty)$ | $\approx 0$ | 近似 |
+| Sigmoid | $(0, 1)$ | $\gt 0$ | 否 |
+| Tanh | $(-1, 1)$ | $0$ | 是 |
+| GELU/Swish/Mish | $(-\infty, +\infty)$ | $\approx 0$ | 近似 |
+
+**零中心化为何重要？** 非零中心化导致后一层的权重梯度符号一致——所有 $W$ 的列更新方向相同，降低收敛速度（"zig-zag"现象）。
+
+### 维度 4：稀疏性
+
+ReLU 产生真正的稀疏激活（约 50% 输出为 0），这对模型压缩和解释性有意义。Swish/GELU/Mish 都是稠密激活。
+
+### 维度 5：兼容性
+
+某些架构对激活函数有偏好：
+- **Transformer**：默认 GELU
+- **CNN（残差网络）**：默认 ReLU，但 GELU 在某些任务上更好
+- **RNN/LSTM**：通常 Tanh（门控需要 $-1$ 到 $1$）
+- **GAN 生成器**：Leaky ReLU（避免稀疏）
+
+### 综合决策矩阵
+
+| 场景 | 第一选择 | 备选 |
+|------|---------|------|
+| 通用 MLP 隐藏层 | ReLU | Leaky ReLU |
+| Transformer | GELU | ReLU（略快） |
+| CNN 深层 | ReLU | Swish（EfficientNet） |
+| GAN | Leaky ReLU | ReLU |
+| RNN/LSTM 单元 | Tanh | - |
+| 自编码器编码器 | ReLU | Tanh |
+| 输出层（二分类） | Sigmoid | - |
+| 输出层（多分类） | Softmax | - |
+| 输出层（回归） | 恒等 | - |
+
+---
+
+## 输出激活 vs 隐藏激活
+
+隐藏层和输出层选择激活函数的逻辑**完全不同**。
+
+### 输出层：由任务决定
+
+| 任务 | 激活函数 | 输出范围 | 损失函数 |
+|------|---------|---------|---------|
+| 二分类 | Sigmoid | $(0, 1)$ | Binary Cross Entropy |
+| 多分类（互斥） | Softmax | $\Delta^{K-1}$ 单纯形 | Cross Entropy |
+| 多标签分类 | Sigmoid (per class) | $(0, 1)^K$ | BCE per class |
+| 回归（任意值） | 恒等 | $\mathbb{R}$ | MSE |
+| 回归 $[0, 1]$ | Sigmoid | $(0, 1)$ | MSE 或 BCE |
+| 回归 $[-1, 1]$ | Tanh | $(-1, 1)$ | MSE |
+
+### 隐藏层：由训练稳定性决定
+
+隐藏层激活函数需要满足三个条件：
+1. **梯度不消失**（避免反向传播失败）
+2. **可微**（允许梯度下降）
+3. **非线性**（保证万能近似）
+
+最常用是 ReLU 家族（快、稳定）。Transformer 例外用 GELU（与注意力机制的概率解释契合）。
+
+### 数值差异的直观示例
+
+```python
+import torch
+import torch.nn as nn
+
+# 二分类：输出 1 个 Sigmoid 神经元
+class BinaryClassifier(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(20, 64)
+        self.fc2 = nn.Linear(64, 1)
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        return torch.sigmoid(self.fc2(x))  # Sigmoid 输出概率
+
+# 多分类：输出 K 个 Softmax 神经元
+class MulticlassClassifier(nn.Module):
+    def __init__(self, K=10):
+        super().__init__()
+        self.fc1 = nn.Linear(20, 64)
+        self.fc2 = nn.Linear(64, K)
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        # 注意：softmax 在 CrossEntropyLoss 中是内置的，不需要显式调用
+        return self.fc2(x)
+
+# 回归：输出层无激活
+class Regressor(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(20, 64)
+        self.fc2 = nn.Linear(64, 1)
+    def forward(self, x):
+        x = torch.relu(self.fc1(x))
+        return self.fc2(x)  # 恒等输出
+```
+
+**小坑**：用 `CrossEntropyLoss` 时，**不要**在最后加 Softmax——`CrossEntropyLoss` 内部会做 log_softmax 并计算 NLL，加了反而会导致数值不稳定。
+
+```python
+# 错误
+out = torch.softmax(self.fc2(x), dim=1)
+loss = nn.CrossEntropyLoss()(out, y)  # softmax 后再加 cross entropy -> log(softmax(softmax(x)))
+
+# 正确
+out = self.fc2(x)  # 直接 logits
+loss = nn.CrossEntropyLoss()(out, y)  # 内部做 log_softmax
+```
+
+---
+
+## 激活函数全面对比实验
+
+最后用一个统一实验对比 5+ 种激活函数的前向、反向、统计性质。
+
+### 实现 5 种激活函数（带反向传播）
+
+```python
+import numpy as np
+
+class Activation:
+    """统一接口的激活函数库（前向 + 解析反向）"""
+
+    def forward(self, x): raise NotImplementedError
+    def backward(self, x): raise NotImplementedError  # 输入 x，输出 f'(x)
+
+class Sigmoid(Activation):
+    def forward(self, x):
+        # 数值稳定
+        return np.where(x >= 0,
+                        1.0 / (1.0 + np.exp(-x)),
+                        np.exp(x) / (1.0 + np.exp(x)))
+    def backward(self, x):
+        s = self.forward(x)
+        return s * (1 - s)
+
+class Tanh(Activation):
+    def forward(self, x): return np.tanh(x)
+    def backward(self, x): return 1 - np.tanh(x) ** 2
+
+class ReLU(Activation):
+    def forward(self, x): return np.maximum(0, x)
+    def backward(self, x): return (x > 0).astype(float)
+
+class LeakyReLU(Activation):
+    def __init__(self, alpha=0.01):
+        self.alpha = alpha
+    def forward(self, x): return np.where(x > 0, x, self.alpha * x)
+    def backward(self, x): return np.where(x > 0, 1, self.alpha)
+
+class Swish(Activation):
+    def __init__(self, beta=1.0):
+        self.beta = beta
+        self.sigmoid = Sigmoid()
+    def forward(self, x):
+        return x * self.sigmoid.forward(self.beta * x)
+    def backward(self, x):
+        s = self.sigmoid.forward(self.beta * x)
+        return s + self.beta * x * s * (1 - s)  # Swish 的导数
+
+class GELU(Activation):
+    """近似实现：GELU(x) ≈ 0.5x(1 + tanh(sqrt(2/π)(x + 0.044715 x^3)))"""
+    def forward(self, x):
+        c = np.sqrt(2 / np.pi)
+        inner = c * (x + 0.044715 * x ** 3)
+        return 0.5 * x * (1 + np.tanh(inner))
+    def backward(self, x):
+        # 数值微分近似（实际工程中用 autograd）
+        h = 1e-5
+        return (self.forward(x + h) - self.forward(x - h)) / (2 * h)
+```
+
+### 数值梯度 vs 解析梯度对比
+
+```python
+import matplotlib.pyplot as plt
+
+# 对每种激活函数，比较解析梯度与数值梯度
+acts = {
+    'Sigmoid': Sigmoid(),
+    'Tanh': Tanh(),
+    'ReLU': ReLU(),
+    'LeakyReLU': LeakyReLU(),
+    'Swish': Swish(),
+    'GELU': GELU(),
+}
+
+x_test = np.linspace(-3, 3, 50)
+for name, act in acts.items():
+    # 数值梯度
+    h = 1e-5
+    grad_numerical = (act.forward(x_test + h) - act.forward(x_test - h)) / (2 * h)
+    # 解析梯度
+    grad_analytic = act.backward(x_test)
+    # 相对误差
+    rel_err = np.abs(grad_numerical - grad_analytic).max()
+    print(f"{name:12s}: max |analytic - numerical| = {rel_err:.2e}")
+```
+
+预期：所有激活函数的相对误差都在 $10^{-7}$ 量级，证明我们的反向传播实现正确。
+
+### 统计性质对比
+
+```python
+# 在正态分布输入下，统计各激活函数的输出分布
+x = np.random.randn(10000)
+
+fig, axes = plt.subplots(2, 3, figsize=(15, 8))
+axes = axes.flatten()
+
+for ax, (name, act) in zip(axes, acts.items()):
+    y = act.forward(x)
+    ax.hist(y, bins=50, density=True, alpha=0.7)
+    ax.set_title(f'{name}\nmean={y.mean():.2f}, std={y.std():.2f}, '
+                 f'zero_frac={(y == 0).mean():.2%}')
+    ax.grid(True)
+
+plt.tight_layout()
+plt.show()
+```
+
+你会看到：
+- **ReLU**：大量输出为 0（稀疏），右偏分布
+- **Sigmoid**：输出集中在 $(0, 1)$，左偏
+- **Tanh**：输出集中在 $(-1, 1)$，均值接近 0
+- **GELU/Swish**：近似正态分布，更平缓
+
+---
+
+## 进一步阅读
+
+1. **Nair, V., & Hinton, G. E. (2010).** *Rectified linear units improve restricted Boltzmann machines.* ICML. — ReLU 的奠基性工作。
+2. **Maas, A. L., Hannun, A. Y., & Ng, A. Y. (2013).** *Rectifier nonlinearities improve neural network acoustic models.* — Leaky ReLU。
+3. **Clevert, D. A., Unterthiner, T., & Hochreiter, S. (2016).** *Fast and accurate deep network learning by exponential linear units (ELUs).* ICLR. arXiv:1511.07289 — ELU。
+4. **Hendrycks, D., & Gimpel, K. (2016).** *Gaussian Error Linear Units (GELUs).* arXiv:1606.08415 — GELU 原始论文。
+5. **Ramachandran, P., Zoph, B., & Le, Q. V. (2017).** *Searching for activation functions.* arXiv:1710.05941 — Swish，用自动搜索发现。
+6. **Misra, D. (2019).** *Mish: A self-regularized non-monotonic activation function.* arXiv:1908.08681 — Mish。
+7. **Xu, B., Wang, N., Chen, T., & Li, M. (2015).** *Empirical evaluation of rectified activations in deep network.* arXiv:1505.00853 — 系统对比各种 ReLU 变种。
+8. **He, K., Zhang, X., Ren, S., & Sun, J. (2015).** *Delving deep into rectifiers.* ICCV. arXiv:1502.01852 — He 初始化的同时分析了 ReLU 的方差传播。
+9. **Goodfellow, I., Bengio, Y., & Courville, A. (2016).** *Deep Learning*, Chapter 6.3 — 激活函数的理论分析。
+10. **Stanford CS231n: Activation Functions.** — 激活函数选择的实战建议。
+
+---
+
+## 小结
+
+| 激活函数 | 核心特点 | 注意点 |
+|---------|---------|--------|
+| Sigmoid | 平滑，概率解释 | 梯度消失，非零中心化 |
+| Tanh | 零中心化 | 仍有梯度消失 |
+| ReLU | 简单，高效 | Dead ReLU |
+| Leaky ReLU | 解决 Dead ReLU | 需要调 alpha |
+| Swish | 自门控，平滑 | 计算稍慢 |
+| GELU | 概率解释 | Transformer 首选 |
+
+## 练习
+
+1. 绘制 Sigmoid、Tanh、ReLU、Leaky ReLU、Swish 的函数曲线和导数曲线，比较它们的特性。
+
+2. 实现一个神经网络，分别用 Sigmoid、ReLU、Leaky ReLU 作为激活函数，比较训练效果。
+
+3. 分析为什么 ReLU 在正区间梯度为1，这对深层网络有什么好处？
+
+4. 尝试不同的激活函数组合（如隐藏层用 ReLU，输出层用 Sigmoid），观察对模型性能的影响。

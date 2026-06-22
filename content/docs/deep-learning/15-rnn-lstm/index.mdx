@@ -1,0 +1,441 @@
+---
+title: 15 循环神经网络 RNN/LSTM
+description: 序列建模、LSTM、GRU
+---
+
+# 15 循环神经网络 RNN/LSTM
+
+循环神经网络（Recurrent Neural Network, RNN）是处理序列数据的核心技术，广泛应用于自然语言处理、时间序列预测等领域。
+
+## 为什么需要 RNN
+
+### 序列数据的挑战
+
+传统神经网络假设输入是独立的，但序列数据（文本、语音、时间序列）有**时序依赖**：
+
+```
+"我今天很开心"
+  ↑  ↑  ↑  ↑
+  顺序很重要！
+```
+
+**序列数据的例子**：
+
+| 数据类型 | 例子 | 时序依赖 |
+|---------|------|---------|
+| **文本** | "我今天很开心" | 词语顺序决定语义 |
+| **语音** | 音频波形 | 前后音频相关 |
+| **时间序列** | 股票价格 | 过去影响未来 |
+| **DNA序列** | ATCG... | 基因编码顺序 |
+| **音乐** | 音符序列 | 旋律依赖前后音符 |
+
+### RNN 的核心思想
+
+引入**循环连接**，让网络有"记忆"：
+
+$$h_t = f(W_{hh}h_{t-1} + W_{xh}x_t + b)$$
+
+```
+     x₁ → [RNN Cell] → h₁ → y₁
+                ↑
+     x₂ → [RNN Cell] → h₂ → y₂
+                ↑
+     x₃ → [RNN Cell] → h₃ → y₃
+```
+
+### RNN vs 传统神经网络
+
+| 特性 | 传统神经网络 | RNN |
+|------|-------------|-----|
+| **输入** | 固定大小 | 序列（可变长度） |
+| **参数共享** | 每层独立 | 时间步共享 |
+| **记忆** | 无 | 有隐藏状态 |
+| **应用** | 图像分类 | 文本、语音、时间序列 |
+
+## RNN 基础
+
+### 前向传播
+
+```python
+import numpy as np
+
+class SimpleRNN:
+    def __init__(self, input_size, hidden_size, output_size):
+        self.hidden_size = hidden_size
+        
+        # 权重
+        self.Wxh = np.random.randn(input_size, hidden_size) * 0.01
+        self.Whh = np.random.randn(hidden_size, hidden_size) * 0.01
+        self.Why = np.random.randn(hidden_size, output_size) * 0.01
+        
+        # 偏置
+        self.bh = np.zeros((1, hidden_size))
+        self.by = np.zeros((1, output_size))
+    
+    def forward(self, inputs):
+        """
+        inputs: 序列输入，形状 (seq_len, input_size)
+        """
+        seq_len = len(inputs)
+        
+        # 存储隐藏状态
+        self.hidden_states = [np.zeros((1, self.hidden_size))]
+        self.outputs = []
+        
+        for t in range(seq_len):
+            x = inputs[t].reshape(1, -1)
+            h_prev = self.hidden_states[-1]
+            
+            # 计算新的隐藏状态
+            h = np.tanh(x @ self.Wxh + h_prev @ self.Whh + self.bh)
+            self.hidden_states.append(h)
+            
+            # 计算输出
+            y = h @ self.Why + self.by
+            self.outputs.append(y)
+        
+        return self.outputs
+
+# 测试
+rnn = SimpleRNN(input_size=3, hidden_size=4, output_size=2)
+inputs = [np.array([1, 0, 0]),
+          np.array([0, 1, 0]),
+          np.array([0, 0, 1])]
+
+outputs = rnn.forward(inputs)
+print("输出:", [o.shape for o in outputs])
+```
+
+### 展开图
+
+```
+时间步:   t=1      t=2      t=3
+
+x₁ ──→ [RNN] ──→ [RNN] ──→ [RNN]
+         ↓         ↓         ↓
+        h₁        h₂        h₃
+         ↓         ↓         ↓
+        y₁        y₂        y₃
+
+参数共享：同一套 W 在所有时间步使用
+```
+
+## RNN 的变体
+
+### 一对一
+
+标准神经网络：
+```
+输入 → 输出
+```
+
+### 一对多
+
+生成任务：
+```
+输入 → [RNN] → 输出1 → [RNN] → 输出2 → [RNN] → 输出3
+```
+
+### 多对一
+
+分类任务（如情感分析）：
+```
+输入1 → [RNN] →
+输入2 → [RNN] → 输出
+输入3 → [RNN] →
+```
+
+### 多对多
+
+序列标注（如命名实体识别）：
+```
+输入1 → [RNN] → 输出1
+输入2 → [RNN] → 输出2
+输入3 → [RNN] → 输出3
+```
+
+### 编码器-解码器
+
+机器翻译：
+```
+输入1 → [RNN] → [RNN] → 输出1
+输入2 → [RNN] → [RNN] → 输出2
+输入3 → [RNN] → [RNN] → 输出3
+         ↑编码器   ↑解码器
+```
+
+## 梯度消失与梯度爆炸
+
+### 问题
+
+RNN 的反向传播需要展开所有时间步：
+
+$$\frac{\partial L}{\partial W} = \sum_t \frac{\partial L}{\partial y_t} \cdot \frac{\partial y_t}{\partial h_t} \cdot \frac{\partial h_t}{\partial W}$$
+
+由于 $$\frac{\partial h_t}{\partial h_{t-1}}$$ 涉及连乘，长时间序列会导致：
+- **梯度消失**：梯度趋近于0，远距离信息无法传递
+- **梯度爆炸**：梯度指数增长，参数更新不稳定
+
+### 梯度裁剪
+
+解决梯度爆炸：
+
+```python
+def clip_gradients(gradients, max_norm=5):
+    """梯度裁剪"""
+    total_norm = np.sqrt(np.sum([np.sum(g**2) for g in gradients]))
+    
+    if total_norm > max_norm:
+        scale = max_norm / total_norm
+        gradients = [g * scale for g in gradients]
+    
+    return gradients
+```
+
+## LSTM（Long Short-Term Memory）
+
+### 核心思想
+
+引入**门控机制**，控制信息的流动：
+
+```
+遗忘门：决定丢弃哪些信息
+输入门：决定存储哪些新信息
+输出门：决定输出哪些信息
+```
+
+### LSTM 单元
+
+```python
+class LSTMCell:
+    def __init__(self, input_size, hidden_size):
+        self.hidden_size = hidden_size
+        
+        # 门控权重
+        self.Wf = np.random.randn(input_size + hidden_size, hidden_size) * 0.01
+        self.Wi = np.random.randn(input_size + hidden_size, hidden_size) * 0.01
+        self.Wc = np.random.randn(input_size + hidden_size, hidden_size) * 0.01
+        self.Wo = np.random.randn(input_size + hidden_size, hidden_size) * 0.01
+        
+        # 偏置
+        self.bf = np.zeros((1, hidden_size))
+        self.bi = np.zeros((1, hidden_size))
+        self.bc = np.zeros((1, hidden_size))
+        self.bo = np.zeros((1, hidden_size))
+    
+    def sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+    
+    def tanh(self, x):
+        return np.tanh(x)
+    
+    def forward(self, x, h_prev, c_prev):
+        """
+        x: 当前输入
+        h_prev: 上一时刻隐藏状态
+        c_prev: 上一时刻细胞状态
+        """
+        # 拼接输入和上一时刻隐藏状态
+        concat = np.hstack([x, h_prev])
+        
+        # 遗忘门
+        f = self.sigmoid(concat @ self.Wf + self.bf)
+        
+        # 输入门
+        i = self.sigmoid(concat @ self.Wi + self.bi)
+        c_tilde = self.tanh(concat @ self.Wc + self.bc)
+        
+        # 更新细胞状态
+        c = f * c_prev + i * c_tilde
+        
+        # 输出门
+        o = self.sigmoid(concat @ self.Wo + self.bo)
+        
+        # 隐藏状态
+        h = o * self.tanh(c)
+        
+        return h, c
+
+# 测试
+lstm = LSTMCell(input_size=3, hidden_size=4)
+x = np.random.randn(1, 3)
+h_prev = np.zeros((1, 4))
+c_prev = np.zeros((1, 4))
+
+h, c = lstm.forward(x, h_prev, c_prev)
+print(f"隐藏状态: {h.shape}")
+print(f"细胞状态: {c.shape}")
+```
+
+### LSTM 门控详解
+
+```
+        ┌─────────────────────────────────────┐
+        │           LSTM Cell                 │
+        │                                     │
+  x ────┼→ [遗忘门 f] ──→ × ──→ ┌────────┐  │
+        │    σ(Wf·[x,h]+bf)      │ 细胞   │  │
+        │                        │ 状态 c │──┼──→ c_next
+  h ────┼→ [输入门 i] ──→ × ──→ │        │  │
+        │    σ(Wi·[x,h]+bi)      └────────┘  │
+        │         ↑               ↑           │
+        │    [候选状态 c̃] ────────→ tanh      │
+        │     tanh(Wc·[x,h]+bc)               │
+        │                                     │
+        │  [输出门 o] ──→ × ──→ tanh ──→ h_next│
+        │   σ(Wo·[x,h]+bo)                    │
+        └─────────────────────────────────────┘
+```
+
+## GRU（Gated Recurrent Unit）
+
+### 简化版 LSTM
+
+将遗忘门和输入门合并为**更新门**：
+
+```python
+class GRUCell:
+    def __init__(self, input_size, hidden_size):
+        self.hidden_size = hidden_size
+        
+        self.Wz = np.random.randn(input_size + hidden_size, hidden_size) * 0.01
+        self.Wr = np.random.randn(input_size + hidden_size, hidden_size) * 0.01
+        self.Wh = np.random.randn(input_size + hidden_size, hidden_size) * 0.01
+        
+        self.bz = np.zeros((1, hidden_size))
+        self.br = np.zeros((1, hidden_size))
+        self.bh = np.zeros((1, hidden_size))
+    
+    def sigmoid(self, x):
+        return 1 / (1 + np.exp(-x))
+    
+    def tanh(self, x):
+        return np.tanh(x)
+    
+    def forward(self, x, h_prev):
+        concat = np.hstack([x, h_prev])
+        
+        # 更新门
+        z = self.sigmoid(concat @ self.Wz + self.bz)
+        
+        # 重置门
+        r = self.sigmoid(concat @ self.Wr + self.br)
+        
+        # 候选隐藏状态
+        concat_reset = np.hstack([x, r * h_prev])
+        h_tilde = self.tanh(concat_reset @ self.Wh + self.bh)
+        
+        # 隐藏状态
+        h = (1 - z) * h_prev + z * h_tilde
+        
+        return h
+```
+
+### LSTM vs GRU
+
+| 特性 | LSTM | GRU |
+|------|------|-----|
+| 门数量 | 3个（遗忘、输入、输出） | 2个（更新、重置） |
+| 细胞状态 | 有 | 无（直接更新隐藏状态） |
+| 参数量 | 更多 | 更少 |
+| 训练速度 | 较慢 | 较快 |
+| 性能 | 通常更好 | 差不多，有时更好 |
+
+## 使用 PyTorch
+
+```python
+import torch
+import torch.nn as nn
+
+class RNNModel(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, num_classes):
+        super(RNNModel, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        
+        # RNN 层
+        self.rnn = nn.RNN(input_size, hidden_size, num_layers, 
+                         batch_first=True)
+        
+        # 全连接层
+        self.fc = nn.Linear(hidden_size, num_classes)
+    
+    def forward(self, x):
+        # 初始化隐藏状态
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
+        
+        # 前向传播
+        out, _ = self.rnn(x, h0)  # out: (batch, seq_len, hidden_size)
+        
+        # 取最后一个时间步的输出
+        out = out[:, -1, :]
+        
+        # 分类
+        out = self.fc(out)
+        return out
+
+# LSTM 版本
+class LSTMModel(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers, num_classes):
+        super(LSTMModel, self).__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        
+        self.lstm = nn.LSTM(input_size, hidden_size, num_layers,
+                           batch_first=True)
+        self.fc = nn.Linear(hidden_size, num_classes)
+    
+    def forward(self, x):
+        h0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
+        c0 = torch.zeros(self.num_layers, x.size(0), self.hidden_size)
+        
+        out, _ = self.lstm(x, (h0, c0))
+        out = out[:, -1, :]
+        out = self.fc(out)
+        return out
+
+# 测试
+model = LSTMModel(input_size=10, hidden_size=128, num_layers=2, num_classes=5)
+x = torch.randn(32, 20, 10)  # batch=32, seq_len=20, input_size=10
+output = model(x)
+print(f"输出形状: {output.shape}")  # (32, 5)
+```
+
+## 双向 RNN
+
+同时考虑过去和未来的信息：
+
+```python
+class BidirectionalLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, num_classes):
+        super().__init__()
+        
+        self.lstm = nn.LSTM(input_size, hidden_size, 
+                           bidirectional=True, batch_first=True)
+        self.fc = nn.Linear(hidden_size * 2, num_classes)  # *2 因为双向
+    
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        out = out[:, -1, :]  # 取最后时刻
+        out = self.fc(out)
+        return out
+```
+
+## 小结
+
+| 模型 | 特点 | 适用场景 |
+|------|------|---------|
+| RNN | 简单，参数少 | 短序列，简单任务 |
+| LSTM | 门控机制，解决梯度消失 | 长序列，需要长期记忆 |
+| GRU | LSTM 的简化版 | 需要快速训练，中等长度序列 |
+| 双向 | 同时利用过去和未来信息 | 序列标注，文本分类 |
+
+## 练习
+
+1. 实现一个简单 RNN，在正弦波预测任务上训练，观察长期预测效果。
+
+2. 比较 RNN、LSTM、GRU 在相同任务上的训练速度和最终性能。
+
+3. 实现梯度裁剪，观察对训练稳定性的影响。
+
+4. 实现双向 LSTM，比较与单向 LSTM 在文本分类任务上的差异。

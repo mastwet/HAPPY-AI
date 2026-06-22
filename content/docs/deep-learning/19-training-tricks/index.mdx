@@ -1,0 +1,348 @@
+---
+title: 19 训练技巧
+description: 权重初始化、早停、数据增强
+---
+
+# 19 训练技巧
+
+掌握训练技巧可以显著提升模型性能和训练效率。
+
+## 为什么需要训练技巧
+
+### 深度学习的挑战
+
+| 挑战 | 描述 | 解决方案 |
+|------|------|---------|
+| **梯度消失** | 深层网络梯度逐层衰减 | 合适的初始化、激活函数 |
+| **梯度爆炸** | 梯度指数增长 | 梯度裁剪 |
+| **过拟合** | 模型记住训练数据 | 正则化、Dropout、早停 |
+| **训练慢** | 收敛速度慢 | 学习率调度、批归一化 |
+| **局部最优** | 陷入局部最小值 | 动量、自适应学习率 |
+| **数据不足** | 标注数据有限 | 数据增强、迁移学习 |
+
+### 训练技巧的分类
+
+| 类别 | 技巧 | 作用 |
+|------|------|------|
+| **初始化** | Xavier, He | 防止梯度消失/爆炸 |
+| **正则化** | L1/L2, Dropout | 防止过拟合 |
+| **优化** | Momentum, Adam | 加速收敛 |
+| **调度** | 学习率衰减 | 精细调整 |
+| **早停** | Early Stopping | 防止过拟合 |
+| **数据** | 数据增强 | 扩充训练数据 |
+
+## 权重初始化
+
+### 为什么重要
+
+不好的初始化会导致：
+- 梯度消失（权重太小）
+- 梯度爆炸（权重太大）
+- 训练停滞
+
+### 常用初始化方法
+
+**Xavier/Glorot 初始化**：
+
+适用于 Sigmoid、Tanh：
+
+$$W \sim \mathcal{U}\left(-\sqrt{\frac{6}{n_{in} + n_{out}}}, \sqrt{\frac{6}{n_{in} + n_{out}}}\right)$$
+
+```python
+import torch
+import torch.nn as nn
+
+# Xavier 初始化
+layer = nn.Linear(784, 256)
+nn.init.xavier_uniform_(layer.weight)
+```
+
+**He 初始化**：
+
+适用于 ReLU：
+
+$$W \sim \mathcal{N}\left(0, \sqrt{\frac{2}{n_{in}}}\right)$$
+
+```python
+# He 初始化
+nn.init.kaiming_normal_(layer.weight, mode='fan_in', nonlinearity='relu')
+```
+
+**PyTorch 默认初始化**：
+
+```python
+layer = nn.Linear(784, 256)
+# 默认使用 Xavier 初始化
+```
+
+### 初始化对比
+
+| 方法 | 适用激活函数 | 分布 |
+|------|------------|------|
+| Xavier | Sigmoid, Tanh | 均匀/正态 |
+| He | ReLU, Leaky ReLU | 正态 |
+| 正态 | 通用 | N(0, 0.01) |
+
+## 早停（Early Stopping）
+
+### 核心思想
+
+验证集误差不再下降时停止训练，防止过拟合。
+
+```python
+class EarlyStopping:
+    def __init__(self, patience=10, min_delta=0, restore_best=True):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.restore_best = restore_best
+        self.best_loss = float('inf')
+        self.counter = 0
+        self.best_state = None
+    
+    def __call__(self, val_loss, model):
+        if val_loss < self.best_loss - self.min_delta:
+            self.best_loss = val_loss
+            self.counter = 0
+            if self.restore_best:
+                self.best_state = model.state_dict().copy()
+        else:
+            self.counter += 1
+        
+        if self.counter >= self.patience:
+            if self.restore_best and self.best_state is not None:
+                model.load_state_dict(self.best_state)
+            return True
+        return False
+
+# 使用
+early_stop = EarlyStopping(patience=10)
+
+for epoch in range(num_epochs):
+    train_loss = train(model, train_loader)
+    val_loss = validate(model, val_loader)
+    
+    if early_stop(val_loss, model):
+        print(f"Early stopping at epoch {epoch}")
+        break
+```
+
+## 数据增强
+
+### 图像增强
+
+```python
+from torchvision import transforms
+
+train_transform = transforms.Compose([
+    transforms.RandomRotation(10),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomCrop(28, padding=4),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2),
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+
+test_transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+```
+
+### 常用增强操作
+
+| 操作 | 作用 |
+|------|------|
+| RandomRotation | 随机旋转 |
+| RandomHorizontalFlip | 随机水平翻转 |
+| RandomCrop | 随机裁剪 |
+| ColorJitter | 颜色抖动 |
+| RandomAffine | 随机仿射变换 |
+| Normalize | 标准化 |
+
+## 学习率预热
+
+训练初期使用小学习率，逐渐增大到目标值：
+
+```python
+class WarmupScheduler:
+    def __init__(self, optimizer, warmup_epochs, target_lr):
+        self.optimizer = optimizer
+        self.warmup_epochs = warmup_epochs
+        self.target_lr = target_lr
+        self.current_epoch = 0
+    
+    def step(self):
+        self.current_epoch += 1
+        if self.current_epoch <= self.warmup_epochs:
+            lr = self.target_lr * self.current_epoch / self.warmup_epochs
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr
+
+# 使用
+warmup = WarmupScheduler(optimizer, warmup_epochs=5, target_lr=0.001)
+
+for epoch in range(num_epochs):
+    train(...)
+    warmup.step()
+    scheduler.step()
+```
+
+## 标签平滑
+
+将硬标签（0/1）变为软标签，防止模型过于自信：
+
+```python
+class LabelSmoothingCrossEntropy(nn.Module):
+    def __init__(self, smoothing=0.1):
+        super().__init__()
+        self.smoothing = smoothing
+    
+    def forward(self, pred, target):
+        n_classes = pred.size(-1)
+        log_probs = torch.log_softmax(pred, dim=-1)
+        
+        # 平滑标签
+        target_dist = torch.zeros_like(log_probs)
+        target_dist.fill_(self.smoothing / (n_classes - 1))
+        target_dist.scatter_(1, target.unsqueeze(1), 1 - self.smoothing)
+        
+        loss = -(target_dist * log_probs).sum(dim=-1).mean()
+        return loss
+
+# 使用
+criterion = LabelSmoothingCrossEntropy(smoothing=0.1)
+```
+
+## 混合精度训练
+
+使用 FP16 加速训练，减少显存占用：
+
+```python
+from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler()
+
+for inputs, labels in train_loader:
+    inputs, labels = inputs.cuda(), labels.cuda()
+    
+    optimizer.zero_grad()
+    
+    # 自动混合精度
+    with autocast():
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+    
+    # 缩放梯度
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+```
+
+## 分布式训练
+
+### DataParallel
+
+```python
+# 单节点多 GPU
+model = nn.DataParallel(model)
+model = model.cuda()
+```
+
+### DistributedDataParallel
+
+```python
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
+
+# 初始化
+dist.init_process_group(backend='nccl')
+
+# 包装模型
+model = DistributedDataParallel(model, device_ids=[local_rank])
+```
+
+## 模型集成
+
+### 投票法
+
+```python
+def ensemble_predict(models, x):
+    predictions = []
+    for model in models:
+        model.eval()
+        with torch.no_grad():
+            pred = model(x)
+            predictions.append(pred)
+    
+    # 平均
+    avg_pred = torch.stack(predictions).mean(dim=0)
+    return avg_pred
+```
+
+### 快照集成
+
+```python
+# 保存不同阶段的模型
+for epoch in range(num_epochs):
+    train(...)
+    
+    if epoch % 10 == 0:
+        torch.save(model.state_dict(), f'model_epoch_{epoch}.pth')
+
+# 集成预测
+models = [load_model(f'model_epoch_{e}.pth') for e in range(0, num_epochs, 10)]
+pred = ensemble_predict(models, x)
+```
+
+## 调试技巧
+
+### 检查梯度
+
+```python
+for name, param in model.named_parameters():
+    if param.grad is not None:
+        print(f"{name}: grad_norm={param.grad.norm():.4f}")
+```
+
+### 检查激活值
+
+```python
+def check_activations(model, x):
+    activations = {}
+    
+    def hook(name):
+        def fn(module, input, output):
+            activations[name] = output.detach()
+        return fn
+    
+    for name, module in model.named_modules():
+        if isinstance(module, nn.ReLU):
+            module.register_forward_hook(hook(name))
+    
+    model(x)
+    
+    for name, act in activations.items():
+        print(f"{name}: mean={act.mean():.4f}, std={act.std():.4f}")
+```
+
+## 小结
+
+| 技巧 | 作用 | 使用场景 |
+|------|------|---------|
+| 权重初始化 | 加速收敛 | 所有网络 |
+| 早停 | 防止过拟合 | 所有训练 |
+| 数据增强 | 增加数据多样性 | 图像任务 |
+| 学习率预热 | 稳定初期训练 | 大模型 |
+| 标签平滑 | 防止过自信 | 分类任务 |
+| 混合精度 | 加速训练 | GPU 训练 |
+| 模型集成 | 提升性能 | 竞赛 |
+
+## 练习
+
+1. 比较不同权重初始化方法对训练收敛的影响。
+
+2. 实现早停机制，观察验证集误差的变化。
+
+3. 对图像数据应用不同的增强策略，比较模型性能。
+
+4. 实现混合精度训练，比较训练速度和显存占用。

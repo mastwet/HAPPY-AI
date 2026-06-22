@@ -1,0 +1,393 @@
+---
+title: 24 扩散模型入门
+description: DDPM、前向/反向过程、噪声调度
+---
+
+# 24 扩散模型入门
+
+2020 年以来，扩散模型（Diffusion Models）成为生成式 AI 的"新王"——Stable Diffusion、DALL-E 2、Midjourney、Sora 的核心都是它。本章从最简单的 DDPM（Denoising Diffusion Probabilistic Models）讲起，让你真正理解它为什么有效。
+
+## 为什么需要扩散模型
+
+回顾第 23 章的 GAN：
+
+- ✅ 生成样本清晰锐利
+- ❌ 训练不稳定（模式崩溃、梯度消失）
+- ❌ 无法计算似然
+- ❌ 难以扩展到高分辨率
+
+再回顾第 22 章的 VAE：
+
+- ✅ 训练稳定
+- ❌ 样本偏模糊
+
+扩散模型的目标：**兼具 GAN 的样本质量 + VAE 的训练稳定性**。DDPM（Ho 2020）做到了这一点。
+
+## 直觉解释
+
+**想象一个物理过程**：
+
+- **前向过程（Forward / Diffusion）**：往一张清晰的猫图上逐步加噪声，经过 T 步之后变成完全的高斯噪声
+- **反向过程（Reverse / Denoise）**：学习如何从噪声中一步步去噪，最终还原出猫图
+
+**关键洞察**：前向过程是固定的（无需学习），我们只需要学习**反向过程**——一个"去噪器"。
+
+**类比**：
+- 像艺术家在修复一幅被雨水侵蚀的画
+- 像考古学家从碎片还原文物
+- 像从一堆乱码中恢复原始信息
+
+## 前向过程（加噪）
+
+给定真实数据 $x_0 \sim q(x_0)$，前向过程逐步加噪：
+
+$$q(x_t | x_{t-1}) = \mathcal{N}(x_t; \sqrt{1-\beta_t} \, x_{t-1}, \beta_t \mathbf{I})$$
+
+其中 $\beta_t$ 是噪声调度（noise schedule），通常取 $10^{-4}$ 到 $0.02$ 之间，随 $t$ 增大。
+
+**重参数化**：
+
+$$x_t = \sqrt{1-\beta_t} \, x_{t-1} + \sqrt{\beta_t} \, \epsilon_{t-1}, \quad \epsilon_{t-1} \sim \mathcal{N}(0, I)$$
+
+### 任意时刻的闭式解
+
+反复迭代 $q(x_t|x_{t-1})$，可以得到从 $x_0$ 直接到 $x_t$ 的公式：
+
+定义 $\alpha_t = 1 - \beta_t$，$\bar\alpha_t = \prod_{s=1}^{t} \alpha_s$，则：
+
+$$q(x_t | x_0) = \mathcal{N}(x_t; \sqrt{\bar\alpha_t} \, x_0, (1 - \bar\alpha_t) \mathbf{I})$$
+
+**重参数化**：
+
+$$x_t = \sqrt{\bar\alpha_t} \, x_0 + \sqrt{1 - \bar\alpha_t} \, \epsilon, \quad \epsilon \sim \mathcal{N}(0, I)$$
+
+这个公式的关键意义：**任意时刻 $t$ 的 $x_t$ 可以直接从 $x_0$ 采样**，不需要逐步迭代。
+
+### 噪声调度
+
+$\beta_t$ 的选择很重要。常见方案：
+
+- **线性**（DDPM 原论文）：$\beta_t$ 从 $10^{-4}$ 线性增长到 $0.02$
+- **余弦**（Improved DDPM）：$\beta_t = 1 - \bar\alpha_t / \bar\alpha_{t-1}$，$\bar\alpha_t = \cos^2(t/T \cdot \pi/2)$
+- **其他**：squaredcos、warmup 等
+
+**余弦调度**通常效果更好，训练更稳定。
+
+## 反向过程（去噪）
+
+反向过程是真正的"学习对象"：
+
+$$p_\theta(x_{t-1} | x_t) = \mathcal{N}(x_{t-1}; \mu_\theta(x_t, t), \Sigma_\theta(x_t, t))$$
+
+我们用一个神经网络（通常是 U-Net）预测均值和方差。
+
+### 关键简化
+
+DDPM 做了一个大胆的简化：
+
+1. **方差固定**：$\Sigma_\theta(x_t, t) = \sigma_t^2 \mathbf{I}$，$\sigma_t^2 = \beta_t$（不学习）
+2. **预测噪声而非均值**：让网络预测噪声 $\epsilon_\theta(x_t, t)$，从中推出 $\mu_\theta$
+
+为什么预测噪声？两个原因：
+- 噪声的尺度与时间步 $t$ 无关，更稳定
+- 经验上训练更快、质量更好
+
+## 训练目标
+
+反向过程的真实后验 $q(x_{t-1}|x_t, x_0)$ 是有解析形式的（因为我们已知 $x_0$）。可以用它来推导训练目标。
+
+经过一系列推导，DDPM 的训练损失**惊人地简单**：
+
+$$\mathcal{L} = \mathbb{E}_{t, x_0, \epsilon}\left[\|\epsilon - \epsilon_\theta(\sqrt{\bar\alpha_t} \, x_0 + \sqrt{1 - \bar\alpha_t} \, \epsilon, t)\|^2\right]$$
+
+**直觉**：网络输入是加噪后的 $x_t$，目标是预测加进去的噪声 $\epsilon$。
+
+**训练流程**：
+
+```text
+1. 从数据集采样 x_0
+2. 随机采样时间步 t ∈ [1, T]
+3. 随机采样噪声 ε ~ N(0, I)
+4. 计算 x_t = sqrt(α̅_t) * x_0 + sqrt(1 - α̅_t) * ε
+5. 预测 ε̂ = ε_θ(x_t, t)
+6. 损失 = ||ε - ε̂||²
+7. 反向传播更新 θ
+```
+
+## 采样过程
+
+训练完成后，从噪声生成样本：
+
+```text
+1. x_T ~ N(0, I)  # 随机噪声
+2. for t = T, T-1, ..., 1:
+3.   预测 ε̂ = ε_θ(x_t, t)
+4.   计算 x_{t-1} = (1/√α_t) * (x_t - (1-α_t)/√(1-α̅_t) * ε̂) + σ_t * z
+5.   z ~ N(0, I)  # 除最后一步
+6. return x_0
+```
+
+**问题**：需要 T 步（通常 T=1000），慢。
+
+**加速方案**：
+
+- **DDIM**（Song 2020）：用确定性 ODE，跳步采样（10-50 步即可）
+- **DPM-Solver**：更高效的高阶 ODE 求解器
+- **Latent Diffusion**：在潜空间做扩散（4x 下采样），计算量减少 16 倍
+
+## U-Net 架构
+
+DDPM 使用的网络是 **U-Net**（Ronneberger 2015），特点：
+
+- 编码器-解码器对称结构（U 形）
+- 跳跃连接（skip connection）保留细节
+- 时间步 $t$ 通过**正弦位置编码**注入到每一层
+
+简化版实现：
+
+```python
+import torch
+import torch.nn as nn
+import math
+
+
+class TimeEmbedding(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, t):
+        # t: (B,) 整数时间步
+        half = self.dim // 2
+        freqs = torch.exp(
+            -math.log(10000) * torch.arange(half, device=t.device) / half
+        )
+        args = t[:, None].float() * freqs[None]
+        return torch.cat([args.cos(), args.sin()], dim=-1)
+
+
+class SimpleUNet(nn.Module):
+    def __init__(self, in_ch=1, base=64, time_dim=128):
+        super().__init__()
+        self.time_emb = nn.Sequential(
+            TimeEmbedding(time_dim),
+            nn.Linear(time_dim, time_dim),
+        )
+        # 下采样
+        self.down1 = self._block(in_ch, base)
+        self.down2 = self._block(base, base * 2)
+        # 中间
+        self.mid = self._block(base * 2, base * 2)
+        # 上采样
+        self.up1 = self._block(base * 4, base)
+        self.up2 = self._block(base * 2, base)
+        # 输出
+        self.out = nn.Conv2d(base, in_ch, 1)
+
+    def _block(self, in_ch, out_ch):
+        return nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.GroupNorm(8, out_ch),
+            nn.ReLU(),
+        )
+
+    def forward(self, x, t):
+        t_emb = self.time_emb(t)
+        # 下采样
+        h1 = self.down1(x)
+        h2 = self.down2(nn.functional.avg_pool2d(h1, 2))
+        # 中间
+        h_mid = self.mid(h2)
+        # 上采样 + skip
+        h = nn.functional.interpolate(h_mid, scale_factor=2)
+        h = self.up1(torch.cat([h, h2], dim=1))  # skip connection
+        h = self.up2(torch.cat([h, h1], dim=1))
+        return self.out(h)
+```
+
+这个简化版 U-Net 足以在 MNIST 上演示 DDPM。生产级实现（如 Stable Diffusion）会复杂得多。
+
+## 完整 DDPM 训练与采样
+
+```python
+class DDPMScheduler:
+    """DDPM 的噪声调度器"""
+
+    def __init__(self, T=1000, beta_start=1e-4, beta_end=0.02):
+        self.T = T
+        self.betas = torch.linspace(beta_start, beta_end, T)
+        self.alphas = 1.0 - self.betas
+        self.alpha_bars = torch.cumprod(self.alphas, dim=0)
+
+    def add_noise(self, x0, t, noise):
+        """前向加噪：x_t = √α̅_t * x_0 + √(1-α̅_t) * ε"""
+        a_bar = self.alpha_bars[t][:, None, None, None]  # (B, 1, 1, 1)
+        return torch.sqrt(a_bar) * x0 + torch.sqrt(1 - a_bar) * noise
+
+    def step(self, x_t, t, pred_noise):
+        """反向去噪一步"""
+        a_t = self.alphas[t][:, None, None, None]
+        a_bar_t = self.alpha_bars[t][:, None, None, None]
+        beta_t = self.betas[t][:, None, None, None]
+
+        # 预测均值
+        mean = (1 / torch.sqrt(a_t)) * (
+            x_t - beta_t / torch.sqrt(1 - a_bar_t) * pred_noise
+        )
+        # 加噪声（除最后一步）
+        if t[0] > 0:
+            noise = torch.randn_like(x_t)
+            sigma = torch.sqrt(beta_t)
+            return mean + sigma * noise
+        return mean
+
+
+# 训练
+device = "cuda"
+model = SimpleUNet().to(device)
+scheduler = DDPMScheduler(T=1000)
+optimizer = torch.optim.Adam(model.parameters(), lr=2e-4)
+
+for epoch in range(50):
+    for x, _ in train_loader:
+        x = x.to(device)
+        t = torch.randint(0, scheduler.T, (x.size(0),), device=device)
+        noise = torch.randn_like(x)
+        x_t = scheduler.add_noise(x, t, noise)
+        pred_noise = model(x_t, t)
+        loss = nn.functional.mse_loss(pred_noise, noise)
+
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
+
+
+# 采样
+@torch.no_grad()
+def sample(model, scheduler, n=16):
+    x = torch.randn(n, 1, 28, 28, device=device)
+    for t in reversed(range(scheduler.T)):
+        t_batch = torch.full((n,), t, device=device, dtype=torch.long)
+        pred_noise = model(x, t_batch)
+        x = scheduler.step(x, t_batch, pred_noise)
+    return x
+
+samples = sample(model, scheduler)
+# 可视化
+import matplotlib.pyplot as plt
+fig, axes = plt.subplots(4, 4, figsize=(4, 4))
+for i, ax in enumerate(axes.flat):
+    ax.imshow(samples[i].cpu().squeeze(), cmap="gray")
+    ax.axis("off")
+plt.show()
+```
+
+## 条件扩散：Classifier Guidance 与 Classifier-Free Guidance
+
+无条件生成的扩散模型只能"随机出图"。要让它听指令（"画一只猫"），需要条件化。
+
+### Classifier Guidance（Dhariwal & Nichol 2021）
+
+用一个**预训练的分类器** $\log p_\phi(y|x_t)$ 引导去噪方向：
+
+$$\hat\epsilon = \epsilon_\theta(x_t, t) - \sqrt{1 - \bar\alpha_t} \, \nabla_{x_t} \log p_\phi(y|x_t)$$
+
+梯度项把 $x_t$ 推向类别 $y$ 概率更高的方向。
+
+**缺点**：需要额外训练分类器。
+
+### Classifier-Free Guidance（Ho & Salimans 2022）
+
+更优雅的方案：训练时**随机丢弃条件**（10% 概率），让模型既能无条件也能有条件生成：
+
+$$\hat\epsilon = (1 + w) \, \epsilon_\theta(x_t, t, y) - w \, \epsilon_\theta(x_t, t)$$
+
+其中 $w$ 是引导强度（guidance scale）。$w$ 越大，生成越"听话"但多样性越低。
+
+**Stable Diffusion、DALL-E 2 都用 Classifier-Free Guidance**。
+
+## 潜空间扩散模型（Latent Diffusion）
+
+直接在像素空间做扩散，计算量巨大（512×512 图像 = 768K 维）。Stable Diffusion 的革命性创新：**在潜空间做扩散**。
+
+### 三阶段流程
+
+1. **VAE 编码器**：把 512×512×3 图像编码到 64×64×4 潜空间（压缩 48 倍）
+2. **U-Net 扩散**：在潜空间做扩散过程
+3. **VAE 解码器**：从潜空间还原到像素空间
+
+**文本条件**：用 CLIP 文本编码器把 prompt 编码成向量，作为 U-Net 的条件输入。
+
+```text
+文本 prompt: "a corgi wearing a red hat"
+       ↓
+   CLIP Text Encoder
+       ↓
+文本嵌入 (77 × 768)
+       ↓
+     [条件输入]
+       ↓
+   随机噪声 z_T
+       ↓
+   U-Net 扩散 (去噪)
+       ↓
+   潜空间表示 z_0
+       ↓
+   VAE 解码器
+       ↓
+  512 × 512 像素图像
+```
+
+**优势**：
+- 计算量减少 ~48 倍
+- 训练只需在低维潜空间
+- 文本和图像的对齐由 CLIP 提供
+
+**Stable Diffusion**（Rombach 2022）、**SDXL**、**SD3** 都是这种架构。
+
+## 应用全景
+
+| 任务 | 代表工作 | 说明 |
+|------|---------|------|
+| 文本到图像 | Stable Diffusion、DALL-E 2、Imagen | 潜空间扩散 + 文本条件 |
+| 图像编辑 | SDEdit、Prompt-to-Prompt | 加噪后再去噪 |
+| 超分辨率 | SR3、IDM | 条件是低分辨率 |
+| 视频生成 | Sora、Runway Gen-3 | 时空扩散 |
+| 音频 | AudioLDM、MusicLDM | 频域扩散 |
+| 3D | DreamFusion、Magic3D | NeRF + 扩散先验 |
+| 医学 | Med-DDPM | 病灶生成与分割 |
+| 分子 | DiffDock | 蛋白质-配体结合预测 |
+
+## 常见误区
+
+1. **认为扩散是 GAN 的替代**：两者各有适用场景，GAN 在实时生成上仍有优势
+2. **忽视采样步数**：T=1000 太慢，工业部署常用 DDIM 20-50 步
+3. **随机丢条件概率设错**：Classifier-Free Guidance 通常 10%，不是 0% 或 50%
+4. **用 MSE 损失代替噪声预测损失**：会导致训练不稳定
+5. **混淆 DDPM 和 Score-based**：数学上等价但实现不同
+6. **忽视 CFG 强度**：$w$ 太小不听话，太大失真多样
+
+## 小结
+
+| 概念 | 说明 |
+|------|------|
+| 前向过程 | 逐步加噪 $x_0 \to x_T$ |
+| 反向过程 | 逐步去噪 $x_T \to x_0$ |
+| 噪声调度 | 控制每步加噪强度（$\beta_t$） |
+| 训练目标 | 预测噪声 $\epsilon$，最小化 MSE |
+| U-Net | 主流去噪网络架构 |
+| CFG | Classifier-Free Guidance 控制条件强度 |
+| 潜空间扩散 | Stable Diffusion 的核心 |
+| DDIM | 加速采样的非马尔可夫方法 |
+
+## 进一步阅读
+
+1. **Ho et al., 2020.** *Denoising Diffusion Probabilistic Models.* [arXiv:2006.11239](https://arxiv.org/abs/2006.11239) — DDPM 原始论文
+2. **Nichol & Dhariwal, 2021.** *Improved Denoising Diffusion Probabilistic Models.* [arXiv:2102.09672](https://arxiv.org/abs/2102.09672) — 余弦调度、学习方差
+3. **Song et al., 2020.** *Denoising Diffusion Implicit Models.* [arXiv:2010.02502](https://arxiv.org/abs/2010.02502) — DDIM 加速采样
+4. **Ho & Salimans, 2022.** *Classifier-Free Diffusion Guidance.* [arXiv:2207.12598](https://arxiv.org/abs/2207.12598) — CFG
+5. **Rombach et al., 2022.** *High-Resolution Image Synthesis with Latent Diffusion Models.* [arXiv:2112.10752](https://arxiv.org/abs/2112.10752) — Stable Diffusion
+6. **Song & Ermon, 2019.** *Generative Modeling by Estimating Gradients of the Data Distribution.* [arXiv:1907.05600](https://arxiv.org/abs/1907.05600) — Score-based 视角
+7. **Lilian Weng's blog.** *What are Diffusion Models?* [link](https://lilianweng.github.io/posts/2021-07-11-diffusion-models/) — 最好的教程之一
+8. **Stanford CS236.** *Deep Generative Models.* [link](https://deepgenerativemodels.github.io/) — 含 DDPM 的详细推导

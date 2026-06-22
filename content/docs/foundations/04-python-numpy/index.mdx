@@ -1,0 +1,389 @@
+---
+title: 04 Python与NumPy
+---
+
+# 04 Python与NumPy
+
+Python 是机器学习领域的事实标准语言。NumPy 则是 Python 科学计算的基石。
+
+## 为什么选择 Python
+
+### Python 在机器学习中的优势
+
+| 优势 | 说明 | 例子 |
+|------|------|------|
+| **语法简洁** | 代码可读性强，开发效率高 | 用10行代码完成C需要100行的工作 |
+| **生态丰富** | 大量ML库和工具 | NumPy, Pandas, Scikit-learn, PyTorch |
+| **社区活跃** | 全球最大的开发者社区 | Stack Overflow, GitHub |
+| **跨平台** | Windows, Linux, macOS 都能运行 | 一次编写，到处运行 |
+| **可扩展** | 可以调用C/C++代码 | 性能关键部分用C编写 |
+
+### Python 与其他语言的对比
+
+| 语言 | 开发速度 | 运行速度 | ML生态 | 适用场景 |
+|------|---------|---------|--------|---------|
+| **Python** | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ | 原型开发、研究 |
+| **C++** | ⭐⭐ | ⭐⭐⭐ | ⭐⭐ | 生产部署、游戏 |
+| **Java** | ⭐⭐ | ⭐⭐⭐ | ⭐⭐ | 企业应用 |
+| **R** | ⭐⭐ | ⭐⭐ | ⭐⭐ | 统计分析 |
+| **Julia** | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐ | 科学计算 |
+
+## Python 基础回顾
+
+### 数据类型
+
+```python
+# 数字
+a = 10          # 整数
+b = 3.14        # 浮点数
+c = 3 + 4j      # 复数
+
+# 字符串
+s = "Hello, AI!"
+
+# 列表（可变）
+lst = [1, 2, 3, 4, 5]
+
+# 元组（不可变）
+t = (1, 2, 3)
+
+# 字典
+person = {"name": "Alice", "age": 25}
+
+# 集合
+s = {1, 2, 3, 3, 3}  # {1, 2, 3}
+```
+
+### 列表推导式
+
+```python
+# 基本用法
+squares = [x**2 for x in range(10)]
+# [0, 1, 4, 9, 16, 25, 36, 49, 64, 81]
+
+# 带条件
+evens = [x for x in range(10) if x % 2 == 0]
+# [0, 2, 4, 6, 8]
+```
+
+### 函数与类
+
+```python
+# 函数
+def add(a, b):
+    return a + b
+
+# 类
+class Student:
+    def __init__(self, name, score):
+        self.name = name
+        self.score = score
+    
+    def passed(self):
+        return self.score >= 60
+
+alice = Student("Alice", 85)
+print(alice.passed())  # True
+```
+
+## NumPy 基础
+
+NumPy（Numerical Python）是 Python 科学计算的核心库，提供了高性能的多维数组对象。
+
+### 安装
+
+```bash
+pip install numpy
+```
+
+### 创建数组
+
+```python
+import numpy as np
+
+# 从列表创建
+a = np.array([1, 2, 3, 4, 5])
+print(a)          # [1 2 3 4 5]
+print(a.shape)    # (5,)
+
+# 二维数组
+b = np.array([[1, 2, 3],
+              [4, 5, 6]])
+print(b.shape)    # (2, 3)
+
+# 特殊数组
+zeros = np.zeros((3, 4))      # 3x4 全零数组
+ones = np.ones((2, 3))        # 2x3 全一数组
+identity = np.eye(3)          # 3x3 单位矩阵
+random = np.random.rand(3, 3) # 3x3 随机数组
+
+# 等差数列
+arange = np.arange(0, 10, 2)  # [0 2 4 6 8]
+linspace = np.linspace(0, 1, 5)  # [0. 0.25 0.5 0.75 1.]
+```
+
+### 数组属性
+
+```python
+import numpy as np
+
+a = np.array([[1, 2, 3],
+              [4, 5, 6]])
+
+print(a.shape)      # (2, 3) — 维度
+print(a.ndim)       # 2 — 维数
+print(a.size)       # 6 — 元素总数
+print(a.dtype)      # int64 — 数据类型
+print(a.itemsize)   # 8 — 每个元素的字节数
+```
+
+### 索引与切片
+
+```python
+import numpy as np
+
+a = np.array([[1, 2, 3],
+              [4, 5, 6],
+              [7, 8, 9]])
+
+# 索引
+print(a[0, 1])      # 2 — 第0行第1列
+print(a[1, :])      # [4 5 6] — 第1行
+print(a[:, 2])      # [3 6 9] — 第2列
+
+# 切片
+print(a[0:2, 1:3])
+# [[2 3]
+#  [5 6]]
+
+# 布尔索引
+print(a[a > 5])     # [6 7 8 9]
+
+# 花式索引
+print(a[[0, 2], [1, 2]])  # [2 9]
+```
+
+### 数组运算
+
+```python
+import numpy as np
+
+a = np.array([[1, 2],
+              [3, 4]])
+b = np.array([[5, 6],
+              [7, 8]])
+
+# 逐元素运算
+print(a + b)
+# [[ 6  8]
+#  [10 12]]
+
+print(a * b)  # 逐元素乘法
+# [[ 5 12]
+#  [21 32]]
+
+print(a @ b)  # 矩阵乘法
+# [[19 22]
+#  [43 50]]
+
+# 广播机制
+c = np.array([1, 2])
+print(a + c)
+# [[2 4]
+#  [4 6]]
+```
+
+### 常用数学函数
+
+```python
+import numpy as np
+
+a = np.array([0, np.pi/4, np.pi/2])
+
+print(np.sin(a))    # [0. 0.707 1.]
+print(np.cos(a))    # [1. 0.707 0.]
+print(np.exp(a))    # 指数
+print(np.log(a + 1))  # 对数（避免log(0)）
+print(np.sqrt(a))   # 平方根
+
+# 统计函数
+b = np.array([[1, 2, 3],
+              [4, 5, 6]])
+
+print(np.sum(b))       # 21
+print(np.mean(b))      # 3.5
+print(np.std(b))       # 1.707...
+print(np.max(b))       # 6
+print(np.min(b))       # 1
+
+print(np.sum(b, axis=0))   # [5 7 9] — 按列求和
+print(np.sum(b, axis=1))   # [6 15] — 按行求和
+```
+
+### 数组形状操作
+
+```python
+import numpy as np
+
+a = np.arange(12)  # [0 1 2 ... 11]
+
+# 重塑
+b = a.reshape(3, 4)
+# [[ 0  1  2  3]
+#  [ 4  5  6  7]
+#  [ 8  9 10 11]]
+
+# 转置
+c = b.T
+# [[ 0  4  8]
+#  [ 1  5  9]
+#  [ 2  6 10]
+#  [ 3  7 11]]
+
+# 展平
+d = b.flatten()   # [0 1 2 ... 11]
+
+# 拼接
+a1 = np.array([[1, 2], [3, 4]])
+a2 = np.array([[5, 6], [7, 8]])
+
+print(np.vstack((a1, a2)))
+# [[1 2]
+#  [3 4]
+#  [5 6]
+#  [7 8]]
+
+print(np.hstack((a1, a2)))
+# [[1 2 5 6]
+#  [3 4 7 8]]
+```
+
+### 随机数生成
+
+```python
+import numpy as np
+
+np.random.seed(42)  # 设置随机种子，保证可复现
+
+# 均匀分布
+a = np.random.rand(3, 3)      # [0, 1) 均匀分布
+
+# 正态分布
+b = np.random.randn(3, 3)     # 标准正态分布 N(0,1)
+c = np.random.normal(10, 2, 1000)  # N(10, 4)
+
+# 整数随机数
+d = np.random.randint(0, 10, (3, 3))  # [0, 10) 整数
+
+# 随机选择
+e = np.random.choice([1, 2, 3, 4, 5], size=3, replace=False)
+```
+
+### NumPy 的核心设计理念
+
+NumPy 的核心是 **ndarray**（N-dimensional array），它的设计哲学是：
+
+1. **向量化计算**：避免Python循环，用C语言级别的向量化操作
+2. **广播机制**：不同形状的数组可以自动扩展进行运算
+3. **内存效率**：连续的内存布局，比Python列表快10-100倍
+
+**实际对比**：
+
+
+### 常见误区
+
+1. **混用Python列表和NumPy数组**：列表推导式慢，应尽量使用NumPy的向量化操作
+2. **频繁创建新数组**：如  会创建新数组，大数据集应考虑原地操作 
+3. **忽视数据类型**： 默认是 int64，如果只需要 int8 会浪费内存
+4. **广播机制理解错误**：广播遵循从后向前对齐原则，维度不匹配时会报错
+
+### 与其他知识点的联系
+
+- **数据预处理**：NumPy是Pandas的基础，Pandas的Series/DataFrame底层是NumPy数组（见第05章）
+- **线性代数**：NumPy的  模块实现了矩阵分解、求逆等操作（见第02章）
+- **机器学习**：Scikit-learn的输入数据要求是NumPy数组或类数组结构
+
+### NumPy 的核心设计理念
+
+NumPy 的核心是 **ndarray**（N-dimensional array），它的设计哲学是：
+
+1. **向量化计算**：避免Python循环，用C语言级别的向量化操作
+2. **广播机制**：不同形状的数组可以自动扩展进行运算
+3. **内存效率**：连续的内存布局，比Python列表快10-100倍
+
+**实际对比**：
+```python
+import numpy as np
+import time
+
+# Python 列表循环
+python_list = list(range(1000000))
+start = time.time()
+result = [x * 2 for x in python_list]
+print(f'Python列表: {time.time() - start:.4f}秒')
+
+# NumPy 向量化
+numpy_array = np.arange(1000000)
+start = time.time()
+result = numpy_array * 2
+print(f'NumPy数组: {time.time() - start:.4f}秒')
+```
+
+### 常见误区
+
+1. **混用Python列表和NumPy数组**：列表推导式慢，应尽量使用NumPy的向量化操作
+2. **频繁创建新数组**：如 `a = a + b` 会创建新数组，大数据集应考虑原地操作 `a += b`
+3. **忽视数据类型**：`np.array([1, 2, 3])` 默认是 int64，如果只需要 int8 会浪费内存
+4. **广播机制理解错误**：广播遵循"从后向前对齐"原则，维度不匹配时会报错
+
+### 与其他知识点的联系
+
+- **数据预处理**：NumPy是Pandas的基础，Pandas的Series/DataFrame底层是NumPy数组（见第05章）
+- **线性代数**：NumPy的 `linalg` 模块实现了矩阵分解、求逆等操作（见第02章）
+- **机器学习**：Scikit-learn的输入数据要求是NumPy数组或类数组结构
+
+## 综合练习
+
+```python
+import numpy as np
+
+# 练习1：创建一个 5x5 的随机矩阵，元素服从 N(0, 1)
+matrix = np.random.randn(5, 5)
+print("矩阵:\n", matrix)
+
+# 练习2：计算矩阵的均值、标准差、最大值、最小值
+print(f"均值: {np.mean(matrix):.3f}")
+print(f"标准差: {np.std(matrix):.3f}")
+print(f"最大值: {np.max(matrix):.3f}")
+print(f"最小值: {np.min(matrix):.3f}")
+
+# 练习3：提取矩阵中大于0的元素
+positive = matrix[matrix > 0]
+print(f"正元素个数: {len(positive)}")
+
+# 练习4：对矩阵进行标准化（均值为0，标准差为1）
+standardized = (matrix - np.mean(matrix)) / np.std(matrix)
+print(f"标准化后均值: {np.mean(standardized):.6f}")
+print(f"标准化后标准差: {np.std(standardized):.6f}")
+```
+
+## 小结
+
+| 操作 | 代码示例 |
+|------|---------|
+| 创建数组 | `np.array([...])`, `np.zeros(...)`, `np.ones(...)` |
+| 索引切片 | `a[i, j]`, `a[start:end]` |
+| 形状操作 | `reshape()`, `flatten()`, `T` |
+| 数学运算 | `+`, `-`, `*`, `@`, `np.dot()` |
+| 统计函数 | `np.sum()`, `np.mean()`, `np.std()` |
+| 随机数 | `np.random.rand()`, `np.random.randn()` |
+
+## 练习
+
+1. 创建一个形状为 (4, 5) 的数组，元素为 1 到 20 的整数。
+
+2. 计算上题数组中每行的和与每列的均值。
+
+3. 生成 1000 个服从 $$N(5, 9)$$ 的随机数，计算其均值和标准差，验证是否符合预期。
+
+4. 实现矩阵乘法（不使用 `@` 运算符），验证与 NumPy 内置结果一致。

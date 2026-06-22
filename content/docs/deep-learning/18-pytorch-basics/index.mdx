@@ -1,0 +1,472 @@
+---
+title: 18 PyTorch基础
+description: Tensor、Autograd、DataLoader、训练流程
+---
+
+# 18 PyTorch基础
+
+PyTorch 是目前最流行的深度学习框架之一，以动态计算图和直观的 API 著称。
+
+## 为什么选择 PyTorch
+
+### PyTorch vs TensorFlow
+
+| 特性 | PyTorch | TensorFlow |
+|------|---------|-----------|
+| **计算图** | 动态图（即时执行） | 静态图（先编译后执行） |
+| **调试** | 简单，可用pdb | 较复杂，需要专用工具 |
+| **学习曲线** | 平缓 | 较陡峭 |
+| **部署** | TorchServe, ONNX | TensorFlow Serving |
+| **社区** | 学术界主导 | 工业界主导 |
+| **动态性** | 原生支持 | 2.x版本支持 |
+
+**选择建议**：
+- 研究/学习：**PyTorch**（更直观，调试方便）
+- 生产部署：**TensorFlow**（部署生态更成熟）
+- 现在两者差距在缩小，TensorFlow 2.x 也支持动态图
+
+### PyTorch 的核心特点
+
+1. **动态计算图**：像写普通Python代码一样写神经网络
+2. **GPU加速**：无缝切换到CUDA
+3. **自动微分**：Autograd自动计算梯度
+4. **丰富的生态**：TorchVision, TorchText, TorchAudio
+
+## Tensor 基础
+
+### 创建 Tensor
+
+```python
+import torch
+
+# 从列表创建
+x = torch.tensor([[1, 2, 3], [4, 5, 6]])
+
+# 特殊 Tensor
+zeros = torch.zeros(3, 4)          # 全零
+ones = torch.ones(2, 3)            # 全一
+eye = torch.eye(3)                 # 单位矩阵
+rand = torch.rand(3, 3)            # 均匀分布
+randn = torch.randn(3, 3)          # 标准正态分布
+
+# 与 NumPy 互转
+import numpy as np
+np_array = np.array([[1, 2], [3, 4]])
+torch_tensor = torch.from_numpy(np_array)
+np_array_back = torch_tensor.numpy()
+```
+
+### Tensor 属性
+
+```python
+x = torch.randn(3, 4, 5)
+
+print(x.shape)      # torch.Size([3, 4, 5])
+print(x.dtype)      # torch.float32
+print(x.device)     # cpu / cuda:0
+print(x.numel())    # 60 (元素总数)
+```
+
+### GPU 加速
+
+```python
+# 检查 GPU
+print(torch.cuda.is_available())
+
+# 创建 GPU Tensor
+x = torch.randn(3, 3).cuda()
+# 或
+x = torch.randn(3, 3).to('cuda')
+
+# 将模型和数据移到 GPU
+model = model.cuda()
+inputs = inputs.cuda()
+```
+
+## Autograd 自动微分
+
+### 核心概念
+
+PyTorch 的自动微分系统会自动计算梯度：
+
+```python
+import torch
+
+# 创建需要梯度的 Tensor
+x = torch.tensor(2.0, requires_grad=True)
+
+# 定义计算
+y = x ** 2 + 3 * x + 1
+
+# 反向传播
+y.backward()
+
+# 查看梯度
+print(x.grad)  # dy/dx = 2x + 3 = 7
+```
+
+### 复杂计算图
+
+```python
+# 多变量
+x = torch.tensor(2.0, requires_grad=True)
+y = torch.tensor(3.0, requires_grad=True)
+
+z = x * y + x ** 2
+
+z.backward()
+
+print(f"dz/dx = {x.grad}")  # y + 2x = 7
+print(f"dz/dy = {y.grad}")  # x = 2
+```
+
+### 梯度累积与清零
+
+```python
+# 梯度会累积！
+x = torch.tensor(2.0, requires_grad=True)
+
+for _ in range(3):
+    y = x ** 2
+    y.backward()
+    print(f"梯度: {x.grad}")  # 会累积！
+
+# 正确做法：每次 backward 前清零
+x.grad.zero_()
+```
+
+### 禁用梯度计算
+
+```python
+# 推理时不需要梯度
+with torch.no_grad():
+    output = model(input)
+
+# 或
+@torch.no_grad()
+def predict(x):
+    return model(x)
+```
+
+## 定义神经网络
+
+### 继承 nn.Module
+
+```python
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class Net(nn.Module):
+    def __init__(self, num_classes=10):
+        super(Net, self).__init__()
+        
+        # 卷积层
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        
+        # 批归一化
+        self.bn1 = nn.BatchNorm2d(32)
+        self.bn2 = nn.BatchNorm2d(64)
+        
+        # 池化
+        self.pool = nn.MaxPool2d(2, 2)
+        
+        # Dropout
+        self.dropout = nn.Dropout(0.5)
+        
+        # 全连接层
+        self.fc1 = nn.Linear(64 * 7 * 7, 128)
+        self.fc2 = nn.Linear(128, num_classes)
+    
+    def forward(self, x):
+        # 卷积层 1
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.pool(x)  # 28x28 -> 14x14
+        
+        # 卷积层 2
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        x = self.pool(x)  # 14x14 -> 7x7
+        
+        # 展平
+        x = x.view(x.size(0), -1)
+        
+        # 全连接
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = self.fc2(x)
+        
+        return x
+
+# 创建模型
+model = Net(num_classes=10)
+print(model)
+
+# 查看参数
+for name, param in model.named_parameters():
+    print(f"{name}: {param.shape}")
+```
+
+### 使用 Sequential
+
+```python
+class SimpleNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.features = nn.Sequential(
+            nn.Conv2d(1, 32, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+        )
+        
+        self.classifier = nn.Sequential(
+            nn.Linear(64 * 7 * 7, 128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(128, 10),
+        )
+    
+    def forward(self, x):
+        x = self.features(x)
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
+        return x
+```
+
+## DataLoader
+
+### 自定义 Dataset
+
+```python
+from torch.utils.data import Dataset, DataLoader
+
+class CustomDataset(Dataset):
+    def __init__(self, X, y, transform=None):
+        self.X = X
+        self.y = y
+        self.transform = transform
+    
+    def __len__(self):
+        return len(self.X)
+    
+    def __getitem__(self, idx):
+        sample = self.X[idx]
+        label = self.y[idx]
+        
+        if self.transform:
+            sample = self.transform(sample)
+        
+        return sample, label
+
+# 使用
+import numpy as np
+
+X = np.random.randn(1000, 28, 28).astype(np.float32)
+y = np.random.randint(0, 10, 1000)
+
+dataset = CustomDataset(X, y)
+dataloader = DataLoader(dataset, batch_size=32, shuffle=True, num_workers=4)
+
+# 遍历
+for batch_X, batch_y in dataloader:
+    print(batch_X.shape)  # (32, 28, 28)
+    print(batch_y.shape)  # (32,)
+    break
+```
+
+### 内置数据集
+
+```python
+from torchvision import datasets, transforms
+
+# 数据预处理
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+
+# 加载 MNIST
+train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+test_dataset = datasets.MNIST(root='./data', train=False, transform=transform)
+
+train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+```
+
+## 训练流程
+
+### 完整训练循环
+
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import datasets, transforms
+
+# 设备
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# 数据
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize((0.5,), (0.5,))
+])
+
+train_dataset = datasets.MNIST('./data', train=True, download=True, transform=transform)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=64, shuffle=True)
+
+# 模型
+model = Net().to(device)
+
+# 损失函数和优化器
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+# 训练
+num_epochs = 10
+for epoch in range(num_epochs):
+    model.train()
+    running_loss = 0.0
+    correct = 0
+    total = 0
+    
+    for i, (inputs, labels) in enumerate(train_loader):
+        inputs, labels = inputs.to(device), labels.to(device)
+        
+        # 前向传播
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        
+        # 反向传播
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        # 统计
+        running_loss += loss.item()
+        _, predicted = outputs.max(1)
+        total += labels.size(0)
+        correct += predicted.eq(labels).sum().item()
+    
+    epoch_loss = running_loss / len(train_loader)
+    epoch_acc = 100. * correct / total
+    print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}, Acc: {epoch_acc:.2f}%')
+
+# 保存模型
+torch.save(model.state_dict(), 'model.pth')
+
+# 加载模型
+model = Net()
+model.load_state_dict(torch.load('model.pth'))
+model.eval()
+```
+
+### 验证和测试
+
+```python
+model.eval()
+correct = 0
+total = 0
+
+with torch.no_grad():
+    for inputs, labels in test_loader:
+        inputs, labels = inputs.to(device), labels.to(device)
+        outputs = model(inputs)
+        _, predicted = outputs.max(1)
+        total += labels.size(0)
+        correct += predicted.eq(labels).sum().item()
+
+print(f'Test Accuracy: {100. * correct / total:.2f}%')
+```
+
+## 模型保存与加载
+
+### 保存整个模型
+
+```python
+torch.save(model, 'model_complete.pth')
+
+# 加载
+model = torch.load('model_complete.pth')
+```
+
+### 只保存参数（推荐）
+
+```python
+# 保存
+torch.save(model.state_dict(), 'model_params.pth')
+
+# 加载
+model = Net()
+model.load_state_dict(torch.load('model_params.pth'))
+model.eval()
+```
+
+### 保存检查点
+
+```python
+checkpoint = {
+    'epoch': epoch,
+    'model_state_dict': model.state_dict(),
+    'optimizer_state_dict': optimizer.state_dict(),
+    'loss': loss,
+}
+
+torch.save(checkpoint, 'checkpoint.pth')
+
+# 恢复
+checkpoint = torch.load('checkpoint.pth')
+model.load_state_dict(checkpoint['model_state_dict'])
+optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+epoch = checkpoint['epoch']
+loss = checkpoint['loss']
+```
+
+## 学习率调度
+
+```python
+from torch.optim.lr_scheduler import StepLR, ExponentialLR, CosineAnnealingLR
+
+# 步长衰减
+scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
+
+# 指数衰减
+scheduler = ExponentialLR(optimizer, gamma=0.95)
+
+# 余弦退火
+scheduler = CosineAnnealingLR(optimizer, T_max=100)
+
+# 训练循环中使用
+for epoch in range(num_epochs):
+    train(...)
+    scheduler.step()
+```
+
+## 小结
+
+| 概念 | PyTorch 实现 |
+|------|-------------|
+| Tensor | `torch.tensor()`, `.cuda()` |
+| 自动微分 | `requires_grad=True`, `.backward()` |
+| 模型定义 | 继承 `nn.Module` |
+| 损失函数 | `nn.CrossEntropyLoss()`, `nn.MSELoss()` |
+| 优化器 | `optim.SGD()`, `optim.Adam()` |
+| 数据加载 | `Dataset`, `DataLoader` |
+| 学习率调度 | `lr_scheduler` |
+
+## 练习
+
+1. 实现一个完整的 PyTorch 训练流程，在 MNIST 上训练一个简单的 CNN。
+
+2. 比较 CPU 和 GPU 训练速度的差异。
+
+3. 实现自定义 Dataset，加载自己的数据。
+
+4. 保存和加载模型检查点，实现训练中断后的恢复。

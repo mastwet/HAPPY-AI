@@ -1,0 +1,92 @@
+[
+  {
+    "src": "F:\\datawhale_books\\math-for-ai\\docs\\attachments\\10.4.png",
+    "dst": "02-matrix-decomp.png",
+    "ch": "02 线性代数",
+    "desc": "矩阵分解/特征向量示意"
+  },
+  {
+    "src": "F:\\datawhale_books\\math-for-ai\\docs\\attachments\\10.5.png",
+    "dst": "02-svd.png",
+    "ch": "02 线性代数",
+    "desc": "SVD 分解示意"
+  },
+  {
+    "src": "F:\\datawhale_books\\math-for-ai\\docs\\attachments\\6.8.png",
+    "dst": "03-distribution.png",
+    "ch": "03 概率统计",
+    "desc": "概率分布示意"
+  },
+  {
+    "src": "F:\\datawhale_books\\math-for-ai\\docs\\attachments\\6.9.png",
+    "dst": "03-bayes.png",
+    "ch": "03 概率统计",
+    "desc": "贝叶斯推断示意"
+  },
+  {
+    "src": "F:\\datawhale_books\\math-for-ai\\docs\\ch2\\attachments\\2-1.png",
+    "dst": "06-linear-fit.png",
+    "ch": "06 线性回归",
+    "desc": "线性回归拟合示意"
+  },
+  {
+    "src": "F:\\datawhale_books\\math-for-ai\\docs\\ch2\\attachments\\2-2.png",
+    "dst": "06-residual.png",
+    "ch": "06 线性回归",
+    "desc": "残差/误差示意"
+  },
+  {
+    "src": "F:\\datawhale_books\\statistical-learning-method-solutions-manual\\docs\\images\\25-1.png",
+    "dst": "08-loss-surface.png",
+    "ch": "08 梯度下降",
+    "desc": "损失函数曲面"
+  },
+  {
+    "src": "F:\\datawhale_books\\statistical-learning-method-solutions-manual\\docs\\images\\25-4.png",
+    "dst": "08-gd-path.png",
+    "ch": "08 梯度下降",
+    "desc": "梯度下降路径"
+  },
+  {
+    "src": "F:\\datawhale_books\\statistical-learning-method-solutions-manual\\docs\\chapter06\\output_25_0.png",
+    "dst": "09-roc.png",
+    "ch": "09 模型评估",
+    "desc": "ROC 曲线"
+  },
+  {
+    "src": "F:\\datawhale_books\\math-for-ai\\docs\\attachments\\8.5.png",
+    "dst": "10-bias-variance.png",
+    "ch": "10 过拟合",
+    "desc": "偏差-方差示意"
+  },
+  {
+    "src": "F:\\datawhale_books\\math-for-ai\\docs\\attachments\\8.6.png",
+    "dst": "10-overfit.png",
+    "ch": "10 过拟合",
+    "desc": "过拟合/欠拟合"
+  },
+  {
+    "src": "F:\\datawhale_books\\easy-rl\\docs\\img\\ch13\\13.1.png",
+    "dst": "11-mlp.png",
+    "ch": "11 神经网络",
+    "desc": "MLP 结构示意"
+  },
+  {
+    "src": "F:\\datawhale_books\\easy-rl\\docs\\img\\ch13\\13.2.png",
+    "dst": "11-perceptron.png",
+    "ch": "11 神经网络",
+    "desc": "感知机结构"
+  },
+  {
+    "src": "F:\\datawhale_books\\learn-nlp-with-transformers\\docs\\篇章1-前言\\pictures\\0-1-transformer-arc.png",
+    "dst": "14-network-arch.png",
+    "ch": "14 CNN",
+    "desc": "网络架构示意"
+  },
+  {
+    "src": "F:\\datawhale_books\\statistical-learning-method-solutions-manual\\docs\\images\\25-6.png",
+    "dst": "13-activation-curves.png",
+    "ch": "13 激活函数",
+    "desc": "激活函数曲线对比"
+  }
+]

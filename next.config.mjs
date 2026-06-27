@@ -5,6 +5,13 @@ const withMDX = createMDX();
 /** @type {import('next').NextConfig} */
 const config = {
   reactStrictMode: true,
+  output: 'export',
+  distDir: 'dist',
+  assetPrefix: process.env.NODE_ENV === 'production' ? '/HAPPY-AI' : '',
+  basePath: process.env.NODE_ENV === 'production' ? '/HAPPY-AI' : '',
+  images: {
+    unoptimized: true,
+  },
   async redirects() {
     return [
       {
